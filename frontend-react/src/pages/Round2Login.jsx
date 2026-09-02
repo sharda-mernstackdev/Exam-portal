@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useExamGuard } from "../hooks/useExamGuard";
 import FullscreenGate from "../components/FullscreenGate";
 import LiveClock from "../components/LiveClock";
@@ -10,29 +10,20 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function Round2Login() {
   const navigate = useNavigate();
   const { fullscreen, enter } = useExamGuard(true);
+  const [searchParams] = useSearchParams();
 
-  const [email, setEmail] = useState("");
-  const [accessCode, setAccessCode] = useState("");
+  const [email, setEmail] = useState(searchParams.get("email") || "");
+  const [accessCode, setAccessCode] = useState(searchParams.get("code") || "");
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const autoTriedRef = useRef(false);
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  const [forceManual, setForceManual] = useState(false);
+  const prefilledFromLink = !!(searchParams.get("email") && searchParams.get("code")) && !forceManual;
 
-    if (!fullscreen) {
-      alert("You must enable Fullscreen Mode to proceed!");
-      enter();
-      return;
-    }
-
-    const nextErrors = {};
-    if (!EMAIL_RE.test(email.trim())) nextErrors.email = "Please enter the email you registered with.";
-    if (!accessCode.trim()) nextErrors.accessCode = "Please enter the Round 2 access code from your invitation email.";
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
+  function doLogin(emailVal, codeVal) {
     setSubmitting(true);
-    ExamAPI.round2Login({ email: email.trim(), round2AccessCode: accessCode.trim() })
+    ExamAPI.round2Login({ email: emailVal.trim(), round2AccessCode: codeVal.trim() })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);
@@ -51,6 +42,35 @@ export default function Round2Login() {
           alert(err.message || "Could not connect to the server. Please try again.");
         }
       });
+  }
+
+  // If the student arrived via the emailed link (email + code already in the
+  // URL), skip manual entry entirely — once they've enabled fullscreen, log
+  // them straight in so all they have to do is click "Enter Fullscreen".
+  useEffect(() => {
+    if (prefilledFromLink && fullscreen && !autoTriedRef.current) {
+      autoTriedRef.current = true;
+      doLogin(email, accessCode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullscreen, prefilledFromLink]);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+
+    if (!fullscreen) {
+      alert("You must enable Fullscreen Mode to proceed!");
+      enter();
+      return;
+    }
+
+    const nextErrors = {};
+    if (!EMAIL_RE.test(email.trim())) nextErrors.email = "Please enter the email you registered with.";
+    if (!accessCode.trim()) nextErrors.accessCode = "Please enter the Round 2 access code from your invitation email.";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    doLogin(email, accessCode);
   }
 
   if (!fullscreen) {
@@ -91,6 +111,20 @@ export default function Round2Login() {
           <span className="badge mt-1" style={{ background: "#e2e8f0", color: "#334155", fontSize: "0.8rem" }}>Congratulations on clearing Round 1</span>
         </div>
 
+        {prefilledFromLink ? (
+          <div style={{ padding: 40, textAlign: "center" }}>
+            <i className="fa-solid fa-spinner fa-spin fa-2x text-primary mb-3"></i>
+            <p className="text-muted mb-0">Signing you in and preparing Round 2...</p>
+            {errors.email || errors.accessCode ? (
+              <>
+                <div className="text-danger small mt-3">{errors.email || errors.accessCode}</div>
+                <button type="button" className="btn btn-sm btn-outline-secondary mt-3" onClick={() => setForceManual(true)}>
+                  Enter details manually
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : (
         <div style={{ padding: 30 }}>
           <p className="text-muted small mb-3">Enter the email you registered with and the Round 2 access code from your invitation email.</p>
           <form onSubmit={handleSubmit} noValidate>
@@ -137,6 +171,7 @@ export default function Round2Login() {
             </div>
           </form>
         </div>
+        )}
       </div>
     </div>
   );

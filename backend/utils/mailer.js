@@ -52,7 +52,8 @@ function wrapTemplate(title, bodyHtml) {
 }
 
 async function sendRound2InvitationEmail(student, round2AccessCode) {
-  const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/round2-login`;
+  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const link = `${baseUrl}/round2-login?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2AccessCode)}`;
   const html = wrapTemplate('Congratulations! You have qualified for Round 2', `
     <p>Dear ${student.fullName},</p>
     <p>Congratulations — you have successfully cleared <strong>Round 1</strong> of the assessment and are now eligible for <strong>Round 2</strong>.</p>

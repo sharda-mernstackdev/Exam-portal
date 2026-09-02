@@ -67,9 +67,17 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
     ExamAPI.adminDeleteQuestion(id).then(onQuestionsChanged).catch((err) => alert(err.message || "Could not delete question."));
   }
 
-  const categoryOptions = [...new Set(questions.map((q) => q.category))];
-
-  function countForCategory(category) {
+  const categoryMap = new Map();
+  exams.forEach((ex) => {
+    const key = ex.title.trim().toLowerCase();
+    if (!categoryMap.has(key)) categoryMap.set(key, ex.title.trim());
+  });
+  questions.forEach((q) => {
+    const key = (q.category || "").trim().toLowerCase();
+    if (key && !categoryMap.has(key)) categoryMap.set(key, q.category.trim());
+  });
+  const categoryOptions = [...categoryMap.values()];
+    function countForCategory(category) {
     return questions.filter((q) => q.category.toLowerCase() === category.toLowerCase()).length;
   }
 
@@ -155,11 +163,14 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
         <form className="row g-3 mt-1" onSubmit={handleQuestionSubmit}>
           <div className="col-md-3">
             <label className="form-label small fw-bold text-secondary">Category</label>
-            <input type="text" className="form-control" list="examCategoryOptions" placeholder="e.g. Reasoning" required
-              value={qForm.category} onChange={(e) => setQForm({ ...qForm, category: e.target.value })} />
-            <datalist id="examCategoryOptions">
-              {categoryOptions.map((c) => <option key={c} value={c} />)}
-            </datalist>
+            <select className="form-select" required
+              value={qForm.category} onChange={(e) => setQForm({ ...qForm, category: e.target.value })}>
+              <option value="" disabled>Select an exam...</option>
+              {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {categoryOptions.length === 0 && (
+              <div className="form-text text-warning">No exams created yet — add one under "Create New Exam" above first.</div>
+            )}
           </div>
           <div className="col-md-9">
             <label className="form-label small fw-bold text-secondary">Question Text</label>

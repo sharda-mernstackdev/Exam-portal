@@ -44,9 +44,6 @@ export default function Round2Login() {
       });
   }
 
-  // If the student arrived via the emailed link (email + code already in the
-  // URL), skip manual entry entirely — once they've enabled fullscreen, log
-  // them straight in so all they have to do is click "Enter Fullscreen".
   useEffect(() => {
     if (prefilledFromLink && fullscreen && !autoTriedRef.current) {
       autoTriedRef.current = true;
@@ -102,6 +99,11 @@ export default function Round2Login() {
           position: "absolute", top: 15, right: 20, color: "#fde047",
           background: "rgba(0,0,0,0.2)", padding: "6px 14px", borderRadius: 6, fontSize: "0.85rem"
         }}
+      />
+      <img
+        src="/psk-logo.png"
+        alt="PSK Technologies"
+        style={{ position: "absolute", top: 15, left: 20, height: 64, background: "#fff", padding: "4px 10px", borderRadius: 6 }}
       />
 
       <div className="my-4" style={{ background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", overflow: "hidden", maxWidth: 460, width: "100%" }}>

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const Student = require('../models/Student');
 const Admin = require('../models/Admin');
 const Settings = require('../models/Settings');
+const SecondLevelExam = require('../models/SecondLevelExam');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -132,6 +133,28 @@ exports.round2Login = async (req, res) => {
     }
     if (round2AccessCode.toUpperCase() !== validCode.toUpperCase()) {
       return res.status(401).json({ message: 'Incorrect Round 2 access code. Please check your invitation email.' });
+    }
+
+    // ---- Round 2 access-window enforcement ----
+    // If the admin has scheduled a Round 2 window (e.g. "Round 1 ends 5:35,
+    // Round 2 access open 5:35-5:45"), block login outside that window. If
+    // no window is configured (startTime/endTime left blank), Round 2 stays
+    // open-ended, matching the original behaviour.
+    const secondExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
+    if (secondExam && secondExam.startTime && secondExam.endTime) {
+      const now = new Date();
+      const windowStart = new Date(secondExam.startTime);
+      const windowEnd = new Date(secondExam.endTime);
+      if (now < windowStart) {
+        return res.status(403).json({
+          message: `Round 2 access has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}.`
+        });
+      }
+      if (now > windowEnd) {
+        return res.status(403).json({
+          message: 'Round 2 access time has expired. You were required to log in within the access window after Round 1 ended.'
+        });
+      }
     }
 
     const token = signStudentToken(student);

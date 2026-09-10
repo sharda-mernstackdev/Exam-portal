@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
 
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
+const FRONTEND_URL = window.location.origin;
 
 export default function ExamManagementTab({ exams, questions, onExamsChanged, onQuestionsChanged }) {
   // ---- Exam create form ----
-  const [examForm, setExamForm] = useState({ examName: "", duration: "", totalQuestions: "", status: "Active" });
+  const [examForm, setExamForm] = useState({
+    examName: "", duration: "", totalQuestions: "", status: "Active",
+    examDate: "", startTime: "", endTime: "", loginWindowMinutes: "5", instructions: ""
+  });
 
   function handleExamSubmit(e) {
     e.preventDefault();
@@ -15,10 +19,15 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       durationMinutes: Number(examForm.duration),
       qualifyingPct: 70,
       totalQuestionsTarget: Number(examForm.totalQuestions) || 0,
-      active: examForm.status === "Active"
+      active: examForm.status === "Active",
+      examDate: examForm.examDate || undefined,
+      startTime: examForm.startTime || undefined,
+      endTime: examForm.endTime || undefined,
+      loginWindowMinutes: Number(examForm.loginWindowMinutes) || 5,
+      instructions: examForm.instructions.trim() || undefined
     })
       .then(() => {
-        setExamForm({ examName: "", duration: "", totalQuestions: "", status: "Active" });
+        setExamForm({ examName: "", duration: "", totalQuestions: "", status: "Active", examDate: "", startTime: "", endTime: "", loginWindowMinutes: "5", instructions: "" });
         onExamsChanged();
       })
       .catch((err) => alert(err.message || "Could not create exam."));
@@ -26,6 +35,20 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
 
   function handleExamDelete(id) {
     ExamAPI.adminDeleteExam(id).then(onExamsChanged).catch((err) => alert(err.message || "Could not delete exam."));
+  }
+
+
+  function handleExamToggleActive(ex) {
+    ExamAPI.adminUpdateExam(ex._id, { active: !ex.active })
+      .then(onExamsChanged)
+      .catch((err) => alert(err.message || "Could not update exam status."));
+  }
+
+  function copyRegistrationLink(examId) {
+    const link = `${FRONTEND_URL}/register/${examId}`;
+    navigator.clipboard.writeText(link)
+      .then(() => alert("Registration link copied:\n" + link))
+      .catch(() => prompt("Copy this registration link:", link));
   }
 
   // ---- Question bank form ----
@@ -67,6 +90,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
     ExamAPI.adminDeleteQuestion(id).then(onQuestionsChanged).catch((err) => alert(err.message || "Could not delete question."));
   }
 
+  // Category options: configured exam names + any categories already used in
+  // the bank, deduped case-insensitively (Apti vs apti collapse to one).
   const categoryMap = new Map();
   exams.forEach((ex) => {
     const key = ex.title.trim().toLowerCase();
@@ -77,9 +102,33 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
     if (key && !categoryMap.has(key)) categoryMap.set(key, q.category.trim());
   });
   const categoryOptions = [...categoryMap.values()];
-    function countForCategory(category) {
+
+  function countForCategory(category) {
     return questions.filter((q) => q.category.toLowerCase() === category.toLowerCase()).length;
   }
+
+  // ---- Registrations (per-exam assignment tracking) ----
+  const [openAssignmentsFor, setOpenAssignmentsFor] = useState(null);
+  const [assignments, setAssignments] = useState([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+
+  function toggleAssignments(examId) {
+    if (openAssignmentsFor === examId) {
+      setOpenAssignmentsFor(null);
+      return;
+    }
+    setOpenAssignmentsFor(examId);
+    setAssignmentsLoading(true);
+    ExamAPI.adminGetExamAssignments(examId)
+      .then(setAssignments)
+      .catch((err) => alert(err.message || "Could not load registrations."))
+      .finally(() => setAssignmentsLoading(false));
+  }
+
+  const STATUS_CLASS = {
+    Registered: "attempted", InvitationSent: "attempted", NotStarted: "not-attempted",
+    InProgress: "attempted", Completed: "pass"
+  };
 
   return (
     <section className="page-section active">
@@ -88,7 +137,7 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
 
       <div className="card-box">
         <h6>Create New Exam</h6>
-        <div className="sub">Add a new exam to the portal</div>
+        <div className="sub">Add a new exam to the portal — optionally schedule a timed session with a shareable registration link</div>
         <form className="row g-3" onSubmit={handleExamSubmit}>
           <div className="col-md-4">
             <label className="form-label small fw-bold text-secondary">Exam Name</label>
@@ -115,6 +164,30 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
           <div className="col-md-2 d-flex align-items-end">
             <button type="submit" className="btn btn-dark w-100 fw-bold">+ Add Exam</button>
           </div>
+
+          <div className="col-12"><hr className="my-1" /></div>
+          <div className="col-12 small fw-bold text-uppercase text-secondary">Scheduled session (optional — leave blank for an always-open exam)</div>
+
+          <div className="col-md-3">
+            <label className="form-label small fw-bold text-secondary">Exam Start</label>
+            <input type="datetime-local" className="form-control"
+              value={examForm.startTime} onChange={(e) => setExamForm({ ...examForm, startTime: e.target.value, examDate: e.target.value ? e.target.value.slice(0, 10) : examForm.examDate })} />
+          </div>
+          <div className="col-md-3">
+            <label className="form-label small fw-bold text-secondary">Exam End</label>
+            <input type="datetime-local" className="form-control"
+              value={examForm.endTime} onChange={(e) => setExamForm({ ...examForm, endTime: e.target.value })} />
+          </div>
+          <div className="col-md-3">
+            <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
+            <input type="number" className="form-control" min="1" placeholder="5"
+              value={examForm.loginWindowMinutes} onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
+          </div>
+          <div className="col-md-3">
+            <label className="form-label small fw-bold text-secondary">Instructions (shown on registration page)</label>
+            <input type="text" className="form-control" placeholder="Optional"
+              value={examForm.instructions} onChange={(e) => setExamForm({ ...examForm, instructions: e.target.value })} />
+          </div>
         </form>
       </div>
 
@@ -126,7 +199,7 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
         ) : (
           <div className="table-responsive">
             <table className="table candidates-table mb-0 align-middle">
-              <thead><tr><th>Exam Name</th><th>Duration</th><th>Total Questions</th><th>Status</th><th>Created On</th><th></th></tr></thead>
+              <thead><tr><th>Exam Name</th><th>Duration</th><th>Total Questions</th><th>Schedule</th><th>Status</th><th>Created On</th><th></th></tr></thead>
               <tbody>
                 {exams.slice().reverse().map((ex) => {
                   const actual = countForCategory(ex.title);
@@ -134,7 +207,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                   const atTarget = target > 0 && actual >= target;
                   const underTarget = target > 0 && actual < target;
                   return (
-                    <tr key={ex._id}>
+                    <Fragment key={ex._id}>
+                    <tr>
                       <td className="name-cell">{ex.title}</td>
                       <td>{ex.durationMinutes} mins</td>
                       <td>
@@ -143,10 +217,58 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                         </span>
                         {underTarget && <div className="small text-muted">{target - actual} more needed</div>}
                       </td>
-                      <td><span className={`badge-pill ${ex.active ? "pass" : "fail"}`}>{ex.active ? "Active" : "Inactive"}</span></td>
-                      <td>{formatDate(ex.createdAt)}</td>
+                      <td className="small">
+                        {ex.startTime ? (
+                          <>
+                            <div>{formatDate(ex.startTime)}</div>
+                            <button type="button" className="btn btn-sm btn-outline-primary mt-1 me-1" onClick={() => copyRegistrationLink(ex._id)}>
+                              <i className="fa-solid fa-link me-1"></i>Copy link
+                            </button>
+                            <button type="button" className="btn btn-sm btn-outline-secondary mt-1" onClick={() => toggleAssignments(ex._id)}>
+                              <i className="fa-solid fa-users me-1"></i>{openAssignmentsFor === ex._id ? "Hide" : "View"} registrations
+                            </button>
+                          </>
+                        ) : <span className="text-muted">Not scheduled</span>}
+                      </td>
+                      <td>
+                        <span className={`badge-pill ${ex.active ? "pass" : "fail"}`}>{ex.active ? "Active" : "Inactive"}</span>
+                        <div className="mt-1">
+                          <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => handleExamToggleActive(ex)}>
+                            {ex.active ? "Deactivate" : "Activate"}
+                          </button>
+                        </div>
+                      </td>                      <td>{formatDate(ex.createdAt)}</td>
                       <td><button type="button" className="btn-clear" onClick={() => handleExamDelete(ex._id)}>Delete</button></td>
                     </tr>
+                    {openAssignmentsFor === ex._id && (
+                      <tr>
+                        <td colSpan={7} className="bg-light p-3">
+                          {assignmentsLoading ? (
+                            <span className="text-muted small">Loading registrations...</span>
+                          ) : assignments.length === 0 ? (
+                            <span className="text-muted small">No students have registered for this exam yet.</span>
+                          ) : (
+                            <table className="table table-sm mb-0">
+                              <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Invitation Sent</th><th>Started</th><th>Completed</th></tr></thead>
+                              <tbody>
+                                {assignments.map((a) => (
+                                  <tr key={a._id}>
+                                    <td>{a.student?.fullName}</td>
+                                    <td>{a.student?.email}</td>
+                                    <td>{a.student?.phone}</td>
+                                    <td><span className={`badge-pill ${STATUS_CLASS[a.status] || "attempted"}`}>{a.status}</span></td>
+                                    <td className="small">{a.invitationSentAt ? formatDate(a.invitationSentAt) : "-"}</td>
+                                    <td className="small">{a.startedAt ? formatDate(a.startedAt) : "-"}</td>
+                                    <td className="small">{a.completedAt ? formatDate(a.completedAt) : "-"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

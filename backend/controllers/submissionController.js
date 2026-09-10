@@ -1,6 +1,8 @@
 const Submission = require('../models/Submission');
 const Student = require('../models/Student');
 const Settings = require('../models/Settings');
+const ExamAssignment = require('../models/ExamAssignment');
+const SecondLevelExam = require('../models/SecondLevelExam');
 const { sendRound2InvitationEmail } = require('../utils/mailer');
 
 // POST /api/submissions — student submits round 1 (dashboard.html "Complete Exam")
@@ -57,7 +59,9 @@ exports.createSubmission = async (req, res) => {
         const settingsDoc2 = settingsDoc || (await Settings.findOne({ key: 'portal' }));
         const round2Code = settingsDoc2 && settingsDoc2.round2AccessCode;
         if (round2Code) {
-          round2EmailResult = await sendRound2InvitationEmail(student, round2Code);
+          const secondExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
+          const window = secondExam ? { startTime: secondExam.startTime, endTime: secondExam.endTime } : null;
+          round2EmailResult = await sendRound2InvitationEmail(student, round2Code, window);
           student.round2EmailSentAt = new Date();
         }
       }
@@ -65,6 +69,13 @@ exports.createSubmission = async (req, res) => {
       student.round2Eligible = false;
     }
     await student.save();
+
+    // If this student came in via a scheduled exam registration (round 1),
+    // mark that assignment Completed so the timed-access flow blocks re-entry.
+    await ExamAssignment.updateMany(
+      { student: student._id, round: 1, status: 'InProgress' },
+      { $set: { status: 'Completed', completedAt: new Date() } }
+    );
 
     res.status(201).json({ submission, round1Status, score, percentage, round2EmailSent: !!(round2EmailResult && round2EmailResult.sent) });
   } catch (err) {

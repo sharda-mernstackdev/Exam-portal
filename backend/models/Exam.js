@@ -7,11 +7,17 @@ const ExamSchema = new mongoose.Schema(
     description: { type: String, trim: true },
     durationMinutes: { type: Number, default: 30 },
     qualifyingPct: { type: Number, default: 40 },
-    // How many questions this exam's category is supposed to have. The
-    // question bank enforces this: once a category reaches its target,
-    // no more questions can be added to it (and admin sees N/target in
-    // the Existing Exams table).
     totalQuestionsTarget: { type: Number, default: 0 },
+    instructions: { type: String, trim: true },
+    // ---- Scheduled exam session ----
+    // examDate + startTime + endTime define the exam window; loginWindowMinutes
+    // is how early (in minutes) a student may log in before startTime. A
+    // student who never logs in before startTime is blocked afterwards
+    // (enforced server-side in examAssignmentController).
+    examDate: { type: Date },
+    startTime: { type: Date },
+    endTime: { type: Date },
+    loginWindowMinutes: { type: Number, default: 5 },
     startDate: { type: Date },
     endDate: { type: Date },
     active: { type: Boolean, default: true }

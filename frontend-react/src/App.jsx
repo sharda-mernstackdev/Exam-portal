@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import Login from "./pages/Login";
 import AdminLogin from "./pages/AdminLogin";
 import Round2Login from "./pages/Round2Login";
@@ -7,14 +7,19 @@ import Dashboard from "./pages/Dashboard";
 import SecondLevelExam from "./pages/SecondLevelExam";
 import Summary from "./pages/Summary";
 import AdminDashboard from "./pages/AdminDashboard";
+import StudentRegister from "./pages/StudentRegister";
+import ExamAccessGate from "./pages/ExamAccessGate";
+import RegisterRedirect from "./pages/RegisterRedirect";
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/admin-login" replace />} />
+      <Route path="/" element={<RegisterRedirect />} />
       <Route path="/login" element={<Login />} />
       <Route path="/admin-login" element={<AdminLogin />} />
       <Route path="/round2-login" element={<Round2Login />} />
+      <Route path="/register/:examId" element={<StudentRegister />} />
+      <Route path="/exam-access/:examId" element={<ExamAccessGate />} />
       <Route path="/instructions" element={<Instructions />} />
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/second-level-exam" element={<SecondLevelExam />} />

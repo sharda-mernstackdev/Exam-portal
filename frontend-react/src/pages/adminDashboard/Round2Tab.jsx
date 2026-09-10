@@ -22,13 +22,18 @@ function toFuncName(title) {
 
 export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsChanged, onCodingQuestionsChanged }) {
   // ---- Second-level exam config form ----
-  const [examForm, setExamForm] = useState({ examName: "", duration: "", testCases: "", difficulty: "Medium" });
+  const [examForm, setExamForm] = useState({ examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" });
 
   function handleExamSubmit(e) {
     e.preventDefault();
-    ExamAPI.adminCreateSecondLevelExam({ title: examForm.examName.trim(), durationMinutes: Number(examForm.duration) })
+    ExamAPI.adminCreateSecondLevelExam({
+      title: examForm.examName.trim(),
+      durationMinutes: Number(examForm.duration),
+      startTime: examForm.startTime || undefined,
+      endTime: examForm.endTime || undefined
+    })
       .then(() => {
-        setExamForm({ examName: "", duration: "", testCases: "", difficulty: "Medium" });
+        setExamForm({ examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" });
         onSecondExamsChanged();
       })
       .catch((err) => alert(err.message || "Could not create Round 2 exam config."));
@@ -36,6 +41,12 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
 
   function handleExamDelete(id) {
     ExamAPI.adminDeleteSecondLevelExam(id).then(onSecondExamsChanged).catch((err) => alert(err.message || "Could not delete."));
+  }
+
+  function handleExamToggleActive(ex) {
+    ExamAPI.adminUpdateSecondLevelExam(ex._id, { active: !ex.active })
+      .then(onSecondExamsChanged)
+      .catch((err) => alert(err.message || "Could not update status."));
   }
 
   // ---- Coding question form ----
@@ -126,6 +137,22 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <div className="col-md-2 d-flex align-items-end">
             <button type="submit" className="btn btn-dark w-100 fw-bold">+ Add Config</button>
           </div>
+
+          <div className="col-12"><hr className="my-1" /></div>
+          <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Access Opens</label>
+            <input type="datetime-local" className="form-control"
+              value={examForm.startTime} onChange={(e) => setExamForm({ ...examForm, startTime: e.target.value })} />
+          </div>
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Access Closes</label>
+            <input type="datetime-local" className="form-control"
+              value={examForm.endTime} onChange={(e) => setExamForm({ ...examForm, endTime: e.target.value })} />
+          </div>
+          <div className="col-md-4 d-flex align-items-end">
+            <div className="form-text mb-2">Candidates who pass Round 1 can only log in to Round 2 between these times. Leave blank for always-open access.</div>
+          </div>
         </form>
       </div>
 
@@ -137,12 +164,25 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
         ) : (
           <div className="table-responsive">
             <table className="table candidates-table mb-0 align-middle">
-              <thead><tr><th>Exam Name</th><th>Duration</th><th>Created On</th><th></th></tr></thead>
+              <thead><tr><th>Exam Name</th><th>Duration</th><th>Access Window</th><th>Status</th><th>Created On</th><th></th></tr></thead>
               <tbody>
                 {secondExams.slice().reverse().map((ex) => (
                   <tr key={ex._id}>
                     <td className="name-cell">{ex.title}</td>
                     <td>{ex.durationMinutes} mins</td>
+                    <td className="small">
+                      {ex.startTime && ex.endTime ? (
+                        <>{formatDate(ex.startTime)} – {new Date(ex.endTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</>
+                      ) : <span className="text-muted">Always open</span>}
+                    </td>
+                    <td>
+                      <span className={`badge-pill ${ex.active ? "pass" : "fail"}`}>{ex.active ? "Active" : "Inactive"}</span>
+                      <div className="mt-1">
+                        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => handleExamToggleActive(ex)}>
+                          {ex.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </div>
+                    </td>
                     <td>{formatDate(ex.createdAt)}</td>
                     <td><button type="button" className="btn-clear" onClick={() => handleExamDelete(ex._id)}>Delete</button></td>
                   </tr>

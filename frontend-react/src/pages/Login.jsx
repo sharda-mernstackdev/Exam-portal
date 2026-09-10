@@ -106,6 +106,11 @@ export default function Login() {
           fontSize: "0.85rem"
         }}
       />
+      <img
+        src="/psk-logo.png"
+        alt="PSK Technologies"
+        style={{ position: "absolute", top: 15, left: 20, height: 64, background: "#fff", padding: "4px 10px", borderRadius: 6 }}
+      />
 
       <div className="my-4" style={{ background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", overflow: "hidden", maxWidth: 480, width: "100%" }}>
         <div style={{ background: "#0f172a", color: "#fff", padding: 25, textAlign: "center" }}>

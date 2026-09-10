@@ -10,6 +10,7 @@ const examRoutes = require('./routes/examRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const studentRoutes = require('./routes/studentRoutes');
+const examAssignmentRoutes = require('./routes/examAssignmentRoutes');
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use('/api', examRoutes);
 app.use('/api', settingsRoutes);
 app.use('/api', submissionRoutes);
 app.use('/api', studentRoutes);
+app.use('/api', examAssignmentRoutes);
 
 // ---- 404 + error handling ----
 app.use((req, res) => res.status(404).json({ message: 'Not found.' }));

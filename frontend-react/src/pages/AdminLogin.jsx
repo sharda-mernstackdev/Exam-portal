@@ -52,6 +52,11 @@ export default function AdminLogin() {
           fontSize: "0.85rem"
         }}
       />
+      <img
+        src="/psk-logo.png"
+        alt="PSK Technologies"
+        style={{ position: "absolute", top: 15, left: 20, height: 64, background: "#fff", padding: "4px 10px", borderRadius: 6 }}
+      />
 
       <div className="my-4" style={{ background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.3)", overflow: "hidden", maxWidth: 420, width: "100%" }}>
         <div style={{ background: "#1e1b4b", color: "#fff", padding: "30px 20px", textAlign: "center" }}>

@@ -95,7 +95,14 @@ const ExamAPI = {
   adminClearStudents: () => request("/admin/students", { method: "DELETE", auth: "admin" }),
 
   // ---- Proctoring ----
-  logProctorEvent: (payload) => request("/proctor-log", { method: "POST", auth: "student", body: payload })
+  logProctorEvent: (payload) => request("/proctor-log", { method: "POST", auth: "student", body: payload }),
+
+  // ---- Scheduled exam registration / timed access (public, no auth) ----
+  getCurrentRegistrationExam: () => request(`/exams/current-registration`),
+  getPublicExamInfo: (examId) => request(`/exams/${examId}/public`),
+  registerForExam: (examId, payload) => request(`/exams/${examId}/register`, { method: "POST", body: payload }),
+  verifyExamAccess: (examId, payload) => request(`/exams/${examId}/access`, { method: "POST", body: payload }),
+  adminGetExamAssignments: (examId) => request(`/admin/exams/${examId}/assignments`, { auth: "admin" })
 };
 
 export default ExamAPI;

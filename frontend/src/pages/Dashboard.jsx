@@ -47,6 +47,13 @@ export default function Dashboard() {
   // Load the live question bank once the session is verified.
   useEffect(() => {
     if (!ready) return;
+    ExamAPI.getSettings()
+      .then((s) => {
+        const mins = Number(s?.round1DurationMinutes) || 30;
+        setTimeLeft(mins * 60);
+      })
+      .catch(() => { /* keep default 30-min fallback on failure */ });
+
     ExamAPI.getQuestions()
       .then((qs) => {
         if (!qs || qs.length === 0) {

@@ -1,4 +1,5 @@
 const Settings = require('../models/Settings');
+const Exam = require('../models/Exam');
 
 async function getOrCreate() {
   let settings = await Settings.findOne({ key: 'portal' });
@@ -13,6 +14,16 @@ exports.getSettings = async (req, res) => {
   const settings = await getOrCreate();
   const obj = settings.toObject();
   delete obj.accessCode;
+
+  // If admin has combined sections into a named Test, the exam timer should
+  // use that Test's auto-summed duration instead of the flat portal-wide
+  // default. No Test configured -> unchanged, existing behaviour.
+  const activeTest = await Exam.findOne({ active: true, 'sectionIds.0': { $exists: true } }).populate('sectionIds');
+  if (activeTest) {
+    obj.round1DurationMinutes = activeTest.sectionIds.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) || obj.round1DurationMinutes;
+    obj.activeTestName = activeTest.title;
+  }
+
   res.json(obj);
 };
 

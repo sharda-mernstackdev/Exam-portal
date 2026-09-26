@@ -20,7 +20,15 @@ const ExamSchema = new mongoose.Schema(
     loginWindowMinutes: { type: Number, default: 5 },
     startDate: { type: Date },
     endDate: { type: Date },
-    active: { type: Boolean, default: true }
+    active: { type: Boolean, default: true },
+    // ---- Combined "Test" support ----
+    // When non-empty, this Exam record represents a combined Test built by
+    // picking existing section exams (each an independent question-set
+    // category, e.g. "Aptitude", "Reasoning"). A Test has no questions of
+    // its own — its duration/total-questions are auto-summed from the
+    // referenced sections. A record with an empty sectionIds array is a
+    // plain section, exactly as before — nothing changes for existing data.
+    sectionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Exam' }]
   },
   { timestamps: true }
 );

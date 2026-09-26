@@ -25,8 +25,12 @@ function generateAccessCode() {
 // open for registration (prefers one whose window hasn't ended yet).
 exports.getCurrentRegistrationExam = async (req, res) => {
   const now = new Date();
-  let exam = await Exam.findOne({ active: true, endTime: { $gte: now } }).sort({ createdAt: -1 });
-  if (!exam) exam = await Exam.findOne({ active: true }).sort({ createdAt: -1 });
+  // Only a combined Test (sectionIds present) is something a student
+  // registers/logs in for — a raw question-set section (Aptitude,
+  // Reasoning, ...) is never a registration target on its own.
+  const testFilter = { active: true, 'sectionIds.0': { $exists: true } };
+  let exam = await Exam.findOne({ ...testFilter, endTime: { $gte: now } }).sort({ createdAt: -1 });
+  if (!exam) exam = await Exam.findOne(testFilter).sort({ createdAt: -1 });
   if (!exam) return res.status(404).json({ message: 'No exam is currently open for registration.' });
   res.json({ id: exam._id, title: exam.title });
 };

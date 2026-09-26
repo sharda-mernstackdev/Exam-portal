@@ -12,16 +12,39 @@ async function getCategoryLimit(category) {
   return { target: exam.totalQuestionsTarget, currentCount, examName: exam.title };
 }
 
+// Finds the single active combined "Test" (an Exam record with a non-empty
+// sectionIds array). If admin has never created one, returns null and every
+// caller falls back to the original "merge all active section exams"
+// behaviour, so existing deployments are unaffected.
+async function findActiveTest() {
+  return Exam.findOne({ active: true, 'sectionIds.0': { $exists: true } }).populate('sectionIds');
+}
+
 // GET /api/questions — public/student facing, used by dashboard.html to load the exam
 exports.listActiveQuestions = async (req, res) => {
   const questions = await Question.find({ active: true }).sort({ createdAt: 1 });
-  const exams = await Exam.find({}, 'title active');
+  const exams = await Exam.find({}, 'title active sectionIds');
 
-  // Only exclude a question if its category matches a configured exam that
-  // is explicitly Inactive. Categories with no matching exam record at all
-  // are left untouched, so default/legacy question banks keep working.
+  const activeTest = await findActiveTest();
+
+  if (activeTest) {
+    // A named Test is active — only show categories belonging to its
+    // selected sections, regardless of what else is marked Active.
+    const allowedCategories = new Set(
+      activeTest.sectionIds.map((s) => s.title.trim().toLowerCase())
+    );
+    const visible = questions.filter((q) => allowedCategories.has((q.category || '').trim().toLowerCase()));
+    return res.json(visible);
+  }
+
+  // No Test configured — original behaviour: only exclude a question if its
+  // category matches a configured exam that is explicitly Inactive.
+  // Categories with no matching exam record at all are left untouched, so
+  // default/legacy question banks keep working. Combined Test records
+  // themselves (sectionIds.length > 0) never match a real category, so they
+  // never accidentally hide anything here.
   const inactiveCategories = new Set(
-    exams.filter((e) => !e.active).map((e) => e.title.trim().toLowerCase())
+    exams.filter((e) => !e.active && (!e.sectionIds || e.sectionIds.length === 0)).map((e) => e.title.trim().toLowerCase())
   );
   const visible = questions.filter((q) => !inactiveCategories.has((q.category || '').trim().toLowerCase()));
 

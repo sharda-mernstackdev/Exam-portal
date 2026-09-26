@@ -116,7 +116,6 @@ export default function ExamAccessGate() {
               <><i className="fa-solid fa-right-to-bracket me-2"></i>Start Exam</>
             )}
           </button>
-
           <div className="text-center small text-muted mt-3">
             Need help? Contact your exam administrator.
           </div>

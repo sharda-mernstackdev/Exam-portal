@@ -5,6 +5,18 @@ import { formatDate } from "./analytics";
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
 const FRONTEND_URL = window.location.origin;
 
+// Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
+// minutes, returns the computed end datetime-local string. Returns "" if
+// either input is missing/invalid.
+function computeEndTime(startTimeStr, durationMinutes) {
+  if (!startTimeStr || !durationMinutes) return "";
+  const start = new Date(startTimeStr);
+  if (isNaN(start.getTime())) return "";
+  const end = new Date(start.getTime() + Number(durationMinutes) * 60000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T${pad(end.getHours())}:${pad(end.getMinutes())}`;
+}
+
 export default function ExamManagementTab({ exams, questions, onExamsChanged, onQuestionsChanged }) {
   // ---- Exam create form ----
   const [examForm, setExamForm] = useState({
@@ -147,7 +159,15 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
           <div className="col-md-2">
             <label className="form-label small fw-bold text-secondary">Duration (mins)</label>
             <input type="number" className="form-control" min="1" placeholder="30" required
-              value={examForm.duration} onChange={(e) => setExamForm({ ...examForm, duration: e.target.value })} />
+              value={examForm.duration}
+              onChange={(e) => {
+                const duration = e.target.value;
+                setExamForm((prev) => ({
+                  ...prev,
+                  duration,
+                  endTime: prev.startTime ? computeEndTime(prev.startTime, duration) : prev.endTime
+                }));
+              }} />
           </div>
           <div className="col-md-2">
             <label className="form-label small fw-bold text-secondary">Total Questions</label>
@@ -171,10 +191,21 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
           <div className="col-md-3">
             <label className="form-label small fw-bold text-secondary">Exam Start</label>
             <input type="datetime-local" className="form-control"
-              value={examForm.startTime} onChange={(e) => setExamForm({ ...examForm, startTime: e.target.value, examDate: e.target.value ? e.target.value.slice(0, 10) : examForm.examDate })} />
+              value={examForm.startTime}
+              onChange={(e) => {
+                const startTime = e.target.value;
+                setExamForm((prev) => ({
+                  ...prev,
+                  startTime,
+                  examDate: startTime ? startTime.slice(0, 10) : prev.examDate,
+                  endTime: prev.duration ? computeEndTime(startTime, prev.duration) : prev.endTime
+                }));
+              }} />
           </div>
           <div className="col-md-3">
-            <label className="form-label small fw-bold text-secondary">Exam End</label>
+            <label className="form-label small fw-bold text-secondary">
+              Exam End <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
+            </label>
             <input type="datetime-local" className="form-control"
               value={examForm.endTime} onChange={(e) => setExamForm({ ...examForm, endTime: e.target.value })} />
           </div>

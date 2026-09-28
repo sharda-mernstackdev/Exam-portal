@@ -627,17 +627,51 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       </div>
 
       <div className="card-box">
-        <h6 className="fw-bold mb-3 border-bottom pb-2" style={{ color: "var(--brand-dark)" }}>Question Bank</h6>
+        <div className="d-flex align-items-center gap-2 mb-3 border-bottom pb-2">
+          <i className="fa-solid fa-layer-group" style={{ color: "var(--brand-dark)" }}></i>
+          <h6 className="fw-bold mb-0" style={{ color: "var(--brand-dark)" }}>Question Bank</h6>
+        </div>
         {questions.length === 0 ? (
           <div className="empty-state"><div className="emoji">📝</div><div>No questions in the bank yet.</div></div>
         ) : (
-          <div className="row g-3">
-            <div className="col-md-8 order-2 order-md-1">
+          <div className="row g-4">
+            <div className="col-md-4 order-1">
+              <div className="qbank-set-heading">Question Sets</div>
+              <div className="qbank-set-list">
+                {categoryOptions.map((c, idx) => {
+                  const count = (questionsByCategory.get(c) || []).length;
+                  const isActive = c === activeCategory;
+                  const theme = TEST_CARD_THEMES[idx % TEST_CARD_THEMES.length];
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`qbank-set-item${isActive ? " active" : ""}`}
+                      style={{
+                        borderLeftColor: theme.accent,
+                        background: isActive ? theme.accent : "#fff"
+                      }}
+                      onClick={() => setSelectedCategory(c)}
+                    >
+                      <span className="qbank-set-icon" style={{ background: isActive ? "rgba(255,255,255,0.25)" : theme.chipBg, color: isActive ? "#fff" : theme.dark }}>
+                        <i className="fa-solid fa-folder"></i>
+                      </span>
+                      <span className="qbank-set-name">{c}</span>
+                      <span className="qbank-set-count" style={{ background: isActive ? "rgba(255,255,255,0.25)" : theme.chipBg, color: isActive ? "#fff" : theme.dark }}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="col-md-8 order-2">
               {activeCategory ? (
                 <>
-                  <div className="d-flex align-items-center justify-content-between mb-2">
+                  <div className="d-flex align-items-center justify-content-between mb-3">
                     <div className="d-flex align-items-center gap-2">
-                      <span className="badge bg-dark text-white p-2 rounded">{activeCategory}</span>
+                      <span className="qbank-active-badge">
+                        <i className="fa-solid fa-folder-open me-2"></i>{activeCategory}
+                      </span>
                       <span className="text-muted small">{(questionsByCategory.get(activeCategory) || []).length} question(s)</span>
                     </div>
                   </div>
@@ -667,26 +701,6 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               ) : (
                 <div className="empty-state"><div className="emoji">👉</div><div>Select a question set to view its questions.</div></div>
               )}
-            </div>
-
-            <div className="col-md-4 order-1 order-md-2">
-              <div className="qbank-set-list">
-                {categoryOptions.map((c) => {
-                  const count = (questionsByCategory.get(c) || []).length;
-                  const isActive = c === activeCategory;
-                  return (
-                    <button
-                      key={c}
-                      type="button"
-                      className={`qbank-set-item${isActive ? " active" : ""}`}
-                      onClick={() => setSelectedCategory(c)}
-                    >
-                      <span className="qbank-set-name">{c}</span>
-                      <span className="qbank-set-count">{count}</span>
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           </div>
         )}

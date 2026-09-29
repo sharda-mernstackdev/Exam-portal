@@ -1,6 +1,7 @@
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
+import { downloadQuestionsCSV, parseQuestionsCSV } from "./questionCsv";
 
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
 const FRONTEND_URL = window.location.origin;
@@ -239,6 +240,53 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
 
   function handleQuestionDelete(id) {
     ExamAPI.adminDeleteQuestion(id).then(onQuestionsChanged).catch((err) => alert(err.message || "Could not delete question."));
+  }
+
+  // ---- Question bank Excel (.csv) export / import ----
+  // Download: current bank (Category, Question Text, Option A-D, Correct
+  // Option) as an Excel-openable .csv. Admin edits it in Excel — adding new
+  // rows below the existing ones — and uploads the same file back; the new
+  // rows get added to the database exactly like using the form above, and
+  // then show up in the Question Bank list below.
+  const csvInputRef = useRef(null);
+  const [importMsg, setImportMsg] = useState("");
+
+  function handleDownloadCSV() {
+    downloadQuestionsCSV(questions);
+  }
+
+  function handleImportClick() {
+    csvInputRef.current?.click();
+  }
+
+  function handleCSVFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const { questions: parsed, skipped } = parseQuestionsCSV(String(reader.result || ""));
+      if (parsed.length === 0) {
+        alert(skipped > 0
+          ? `Could not import — all ${skipped} row(s) were missing a category, question text, an option, or a valid Correct Option (A/B/C/D).`
+          : "No question rows found in that file.");
+        return;
+      }
+      ExamAPI.adminBulkCreateQuestions(parsed)
+        .then((res) => {
+          const inserted = res?.inserted ?? parsed.length;
+          const duplicates = parsed.length - inserted;
+          const parts = [`${inserted} question(s) added`];
+          if (duplicates > 0) parts.push(`${duplicates} duplicate question text(s) skipped`);
+          if (skipped > 0) parts.push(`${skipped} row(s) skipped (missing/invalid data)`);
+          setImportMsg(parts.join(" · "));
+          setTimeout(() => setImportMsg(""), 5000);
+          onQuestionsChanged();
+        })
+        .catch((err) => alert(err.message || "Could not import questions from file."));
+    };
+    reader.readAsText(file);
+    e.target.value = ""; // allow re-selecting the same file next time
   }
 
   // Category options: configured exam names + any categories already used in
@@ -585,7 +633,22 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       <div className="section-sub mb-3">Add and manage MCQ questions. These sync directly to the candidate's dashboard exam.</div>
 
       <div className="card-box mb-4">
-        <h6 className="fw-bold" style={{ color: "var(--brand-dark)" }}>{editingId ? "Edit MCQ" : "Add MCQ to Database"}</h6>
+        <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <h6 className="fw-bold mb-0" style={{ color: "var(--brand-dark)" }}>{editingId ? "Edit MCQ" : "Add MCQ to Database"}</h6>
+          <div className="d-flex align-items-center gap-2">
+            <button type="button" className="btn btn-sm btn-outline-dark" onClick={handleDownloadCSV}>
+              <i className="fa-solid fa-file-arrow-down me-1"></i>Download Excel
+            </button>
+            <button type="button" className="btn btn-sm btn-outline-dark" onClick={handleImportClick}>
+              <i className="fa-solid fa-file-arrow-up me-1"></i>Upload Excel
+            </button>
+            <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="d-none" onChange={handleCSVFileSelected} />
+          </div>
+        </div>
+        <div className="form-text mb-2">
+          Download the bank as an Excel sheet (.csv — opens directly in Excel/Google Sheets), add new rows in the same columns, save, then Upload the same file — the new questions get added here just like using the form below.
+        </div>
+        {importMsg && <div className="text-success small fw-bold mb-2">{importMsg}</div>}
         <form className="row g-3 mt-1" onSubmit={handleQuestionSubmit}>
           <div className="col-md-3">
             <label className="form-label small fw-bold text-secondary">Category</label>

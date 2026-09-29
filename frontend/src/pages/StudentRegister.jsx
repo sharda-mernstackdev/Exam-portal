@@ -104,6 +104,39 @@ export default function StudentRegister({ examId: examIdProp }) {
 
   if (!exam) return null;
 
+  if (exam.registrationOpen === false) {
+    return (
+      <div style={pageStyle}>
+        <div
+          className="text-center"
+          style={{
+            background: "#fff",
+            borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+            padding: 36,
+            maxWidth: 480,
+          }}
+        >
+          <i className="fa-solid fa-lock fa-3x mb-3 text-danger"></i>
+          <h5 className="fw-bold">Registration Closed</h5>
+          <p className="text-muted mb-0">
+            Registration for <strong>{exam.title}</strong> closed on{" "}
+            <strong>
+              {exam.registrationClosesAt
+                ? new Date(exam.registrationClosesAt).toLocaleString("en-US", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })
+                : "the scheduled cut-off"}
+            </strong>{" "}
+            — 24 hours before the exam start time. Please contact the
+            administrator if you still need access.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={pageStyle}>
       <LiveClock

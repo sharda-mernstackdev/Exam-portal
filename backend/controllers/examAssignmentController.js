@@ -20,6 +20,21 @@ function generateAccessCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+// Registration must close a full day before the exam actually starts (e.g.
+// a 12:00 PM exam stops accepting new registrations at 12:00 PM the day
+// before) — this gives the admin a clean cut-off to finalize the candidate
+// list, send invitations, etc. Returns null for a Test with no scheduled
+// startTime (an always-open test has no registration cut-off).
+const REGISTRATION_CUTOFF_HOURS = 24;
+function registrationClosesAt(exam) {
+  if (!exam.startTime) return null;
+  return new Date(new Date(exam.startTime).getTime() - REGISTRATION_CUTOFF_HOURS * 60 * 60000);
+}
+function isRegistrationOpen(exam) {
+  const closesAt = registrationClosesAt(exam);
+  return !closesAt || new Date() < closesAt;
+}
+
 // GET /api/exams/current-registration — used by the root URL so admin can
 // share just the bare domain with students; auto-picks the exam currently
 // open for registration (prefers one whose window hasn't ended yet).
@@ -29,7 +44,14 @@ exports.getCurrentRegistrationExam = async (req, res) => {
   // registers/logs in for — a raw question-set section (Aptitude,
   // Reasoning, ...) is never a registration target on its own.
   const testFilter = { active: true, 'sectionIds.0': { $exists: true } };
-  let exam = await Exam.findOne({ ...testFilter, endTime: { $gte: now } }).sort({ createdAt: -1 });
+
+  // Prefer a Test that's still actually open for registration (i.e. more
+  // than 24h before its start). Falling back to "exam hasn't ended yet" (even
+  // if registration already closed) or finally to any active Test keeps the
+  // root URL working the way it always has for admins previewing things,
+  // while candidates land on the right (possibly "closed") exam by default.
+  const candidates = await Exam.find({ ...testFilter, endTime: { $gte: now } }).sort({ createdAt: -1 });
+  let exam = candidates.find((e) => isRegistrationOpen(e)) || candidates[0];
   if (!exam) exam = await Exam.findOne(testFilter).sort({ createdAt: -1 });
   if (!exam) return res.status(404).json({ message: 'No exam is currently open for registration.' });
   res.json({ id: exam._id, title: exam.title });
@@ -47,7 +69,9 @@ exports.getPublicExamInfo = async (req, res) => {
     startTime: exam.startTime,
     endTime: exam.endTime,
     loginWindowMinutes: exam.loginWindowMinutes,
-    instructions: exam.instructions
+    instructions: exam.instructions,
+    registrationOpen: isRegistrationOpen(exam),
+    registrationClosesAt: registrationClosesAt(exam)
   });
 };
 
@@ -59,6 +83,17 @@ exports.registerForExam = async (req, res) => {
     const exam = await Exam.findById(req.params.examId);
     if (!exam || !exam.active) {
       return res.status(404).json({ message: 'This exam is not available for registration.' });
+    }
+
+    // ---- Registration cut-off (24h before start) ----
+    // This is the real security boundary — never trust the frontend to have
+    // hidden the form in time. A student hitting this endpoint directly
+    // after the cut-off must still be rejected here.
+    if (!isRegistrationOpen(exam)) {
+      const closesAt = registrationClosesAt(exam);
+      return res.status(403).json({
+        message: `Registration for this exam closed on ${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} (24 hours before the exam start time). Please contact the administrator.`
+      });
     }
 
     const fullName = (req.body.fullName || '').trim();

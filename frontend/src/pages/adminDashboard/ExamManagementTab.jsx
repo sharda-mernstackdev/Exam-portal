@@ -467,14 +467,14 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               <input type="datetime-local" className="form-control"
                 value={testForm.endTime} onChange={(e) => setTestForm({ ...testForm, endTime: e.target.value })} />
             </div>
-            <div className="col-md-3">
+            <div className="col-md-6">
               <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
               <input type="number" className="form-control" min="1" placeholder="5"
                 value={testForm.loginWindowMinutes} onChange={(e) => setTestForm({ ...testForm, loginWindowMinutes: e.target.value })} />
             </div>
-            <div className="col-md-3">
+            <div className="col-12">
               <label className="form-label small fw-bold text-secondary">Instructions (shown on registration page)</label>
-              <input type="text" className="form-control" placeholder="Optional"
+              <textarea className="form-control" placeholder="Optional — e.g. bring a valid ID, arrive 15 minutes early, exam rules, etc." rows={4}
                 value={testForm.instructions} onChange={(e) => setTestForm({ ...testForm, instructions: e.target.value })} />
             </div>
 

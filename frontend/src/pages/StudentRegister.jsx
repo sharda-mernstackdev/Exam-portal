@@ -129,8 +129,8 @@ export default function StudentRegister({ examId: examIdProp }) {
                   })
                 : "the scheduled cut-off"}
             </strong>{" "}
-            — 24 hours before the exam start time. Please contact the
-            administrator if you still need access.
+            — at 12:00 AM (midnight) on the day of the exam. Please contact
+            the administrator if you still need access.
           </p>
         </div>
       </div>
@@ -203,6 +203,28 @@ export default function StudentRegister({ examId: examIdProp }) {
             </div>
           ) : (
             <>
+              {exam.registrationClosesAt && (
+                <div
+                  className="small mb-3"
+                  style={{
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    color: "#b91c1c",
+                  }}
+                >
+                  <i className="fa-solid fa-clock me-2"></i>
+                  Exam Date &amp; Time: {formatDate(exam.startTime)},{" "}
+                  {formatTime(exam.startTime)}. Registration is open only
+                  till{" "}
+                  <strong>
+                    12:00 AM on {formatDate(exam.registrationClosesAt)}
+                  </strong>
+                  — after that, registration cannot be done.
+                </div>
+              )}
+
               <div className="bg-light border rounded p-3 mb-4">
                 <h6 className="fw-bold mb-2">{exam.title}</h6>
                 <div className="small text-secondary">
@@ -221,7 +243,9 @@ export default function StudentRegister({ examId: examIdProp }) {
                   </div>
                 </div>
                 {exam.instructions && (
-                  <p className="small mt-2 mb-0">{exam.instructions}</p>
+                  <p className="small mt-2 mb-0" style={{ whiteSpace: "pre-line" }}>
+                    {exam.instructions}
+                  </p>
                 )}
               </div>
 

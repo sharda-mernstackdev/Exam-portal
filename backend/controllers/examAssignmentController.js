@@ -20,15 +20,26 @@ function generateAccessCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-// Registration must close a full day before the exam actually starts (e.g.
-// a 12:00 PM exam stops accepting new registrations at 12:00 PM the day
-// before) — this gives the admin a clean cut-off to finalize the candidate
-// list, send invitations, etc. Returns null for a Test with no scheduled
-// startTime (an always-open test has no registration cut-off).
-const REGISTRATION_CUTOFF_HOURS = 24;
+// Registration always closes at 12:00 AM (midnight) on the exam's own day —
+// no matter what time the exam itself starts. E.g. an exam on 30 Sep at
+// 1:30 PM stops accepting registrations the moment 30 Sep begins (i.e. the
+// last valid moment to register is 29 Sep 11:59:59 PM). This is fixed to
+// India time (IST, UTC+5:30 — no DST) since that's this portal's audience,
+// so it doesn't drift with the server's own timezone. Returns null for a
+// Test with no scheduled startTime (an always-open test has no cut-off).
+const IST_OFFSET_MS = 5.5 * 60 * 60000;
 function registrationClosesAt(exam) {
   if (!exam.startTime) return null;
-  return new Date(new Date(exam.startTime).getTime() - REGISTRATION_CUTOFF_HOURS * 60 * 60000);
+  const start = new Date(exam.startTime);
+  // Shift the start instant into IST wall-clock, take that calendar day's
+  // midnight, then shift back to a real UTC instant — this is the actual
+  // moment "12:00 AM IST on the exam's date" occurs, regardless of the
+  // server's own local timezone.
+  const istWallClock = new Date(start.getTime() + IST_OFFSET_MS);
+  const istMidnightUTC = Date.UTC(
+    istWallClock.getUTCFullYear(), istWallClock.getUTCMonth(), istWallClock.getUTCDate(), 0, 0, 0
+  );
+  return new Date(istMidnightUTC - IST_OFFSET_MS);
 }
 function isRegistrationOpen(exam) {
   const closesAt = registrationClosesAt(exam);
@@ -45,11 +56,12 @@ exports.getCurrentRegistrationExam = async (req, res) => {
   // Reasoning, ...) is never a registration target on its own.
   const testFilter = { active: true, 'sectionIds.0': { $exists: true } };
 
-  // Prefer a Test that's still actually open for registration (i.e. more
-  // than 24h before its start). Falling back to "exam hasn't ended yet" (even
-  // if registration already closed) or finally to any active Test keeps the
-  // root URL working the way it always has for admins previewing things,
-  // while candidates land on the right (possibly "closed") exam by default.
+  // Prefer a Test that's still actually open for registration (i.e. before
+  // midnight IST on its own exam day). Falling back to "exam hasn't ended
+  // yet" (even if registration already closed) or finally to any active
+  // Test keeps the root URL working the way it always has for admins
+  // previewing things, while candidates land on the right (possibly
+  // "closed") exam by default.
   const candidates = await Exam.find({ ...testFilter, endTime: { $gte: now } }).sort({ createdAt: -1 });
   let exam = candidates.find((e) => isRegistrationOpen(e)) || candidates[0];
   if (!exam) exam = await Exam.findOne(testFilter).sort({ createdAt: -1 });
@@ -85,14 +97,14 @@ exports.registerForExam = async (req, res) => {
       return res.status(404).json({ message: 'This exam is not available for registration.' });
     }
 
-    // ---- Registration cut-off (24h before start) ----
+    // ---- Registration cut-off (12:00 AM on the exam's own day) ----
     // This is the real security boundary — never trust the frontend to have
     // hidden the form in time. A student hitting this endpoint directly
     // after the cut-off must still be rejected here.
     if (!isRegistrationOpen(exam)) {
       const closesAt = registrationClosesAt(exam);
       return res.status(403).json({
-        message: `Registration for this exam closed on ${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} (24 hours before the exam start time). Please contact the administrator.`
+        message: `Registration for this exam closed at 12:00 AM on the exam day (${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}). Please contact the administrator.`
       });
     }
 

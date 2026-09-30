@@ -67,6 +67,8 @@ const ExamAPI = {
   adminCreateCodingQuestion: (payload) => request("/admin/coding-questions", { method: "POST", auth: "admin", body: payload }),
   adminUpdateCodingQuestion: (id, payload) => request(`/admin/coding-questions/${id}`, { method: "PUT", auth: "admin", body: payload }),
   adminDeleteCodingQuestion: (id) => request(`/admin/coding-questions/${id}`, { method: "DELETE", auth: "admin" }),
+  
+  adminBulkCreateCodingQuestions: (questions) => request("/admin/coding-questions/bulk", { method: "POST", auth: "admin", body: { questions } }),
 
   // ---- Exams (round 1 config) ----
   adminGetExams: () => request("/admin/exams", { auth: "admin" }),

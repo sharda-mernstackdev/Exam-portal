@@ -1,10 +1,11 @@
 const CodingQuestion = require('../models/CodingQuestion');
+const SecondLevelExam = require('../models/SecondLevelExam');
 
-// GET /api/coding-questions — student-facing, hides the `hidden: true` test cases' expected output? 
-// (kept simple: still needed client-side to run visible examples; hidden test cases are still required
-// for scoring so we return everything but the frontend must not display hidden ones in the UI.)
 exports.listActiveCodingQuestions = async (req, res) => {
-  const questions = await CodingQuestion.find({ active: true }).sort({ createdAt: 1 });
+  const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
+  const filter = { active: true };
+  if (currentExam && currentExam.difficulty) filter.difficulty = currentExam.difficulty;
+  const questions = await CodingQuestion.find(filter).sort({ createdAt: 1 });
   res.json(questions);
 };
 
@@ -35,9 +36,13 @@ exports.deleteCodingQuestion = async (req, res) => {
 };
 
 exports.bulkCreateCodingQuestions = async (req, res) => {
-  const items = Array.isArray(req.body.questions) ? req.body.questions : [];
-  const count = await CodingQuestion.countDocuments();
-  if (count > 0) return res.status(200).json({ inserted: 0, message: 'Bank already seeded.' });
-  const inserted = items.length ? await CodingQuestion.insertMany(items) : [];
-  res.status(201).json({ inserted: inserted.length });
+  try {
+    const items = Array.isArray(req.body.questions) ? req.body.questions : [];
+    const existingTitles = new Set((await CodingQuestion.find({}, 'title')).map(q => q.title.trim().toLowerCase()));
+    const toInsert = items.filter(q => q.title && !existingTitles.has(q.title.trim().toLowerCase()));
+    const inserted = toInsert.length ? await CodingQuestion.insertMany(toInsert) : [];
+    res.status(201).json({ inserted: inserted.length, duplicates: items.length - toInsert.length });
+  } catch (err) {
+    res.status(500).json({ message: 'Bulk insert failed.' });
+  }
 };

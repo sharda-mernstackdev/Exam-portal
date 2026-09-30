@@ -232,3 +232,45 @@ exports.listAssignmentsForExam = async (req, res) => {
     .sort({ createdAt: -1 });
   res.json(assignments);
 };
+
+// GET /api/admin/exams/today-registrations — how many candidates have
+// registered so far for the exam(s) scheduled "today" (IST calendar day),
+// so the admin can see, at a glance on the Executive Dashboard, whether
+// enough people have signed up before today's registration window closes
+// at midnight. Only combined Tests (sectionIds present) are registration
+// targets — a raw question-set section is never registered for directly.
+exports.getTodayRegistrationStats = async (req, res) => {
+  const now = new Date();
+  const istWallClock = new Date(now.getTime() + IST_OFFSET_MS);
+  const istMidnightUTC = Date.UTC(
+    istWallClock.getUTCFullYear(), istWallClock.getUTCMonth(), istWallClock.getUTCDate(), 0, 0, 0
+  );
+  const todayStartUTC = new Date(istMidnightUTC - IST_OFFSET_MS);
+  const todayEndUTC = new Date(todayStartUTC.getTime() + 24 * 60 * 60000);
+
+  const todaysExams = await Exam.find({
+    active: true,
+    'sectionIds.0': { $exists: true },
+    $or: [
+      { startTime: { $gte: todayStartUTC, $lt: todayEndUTC } },
+      { examDate: { $gte: todayStartUTC, $lt: todayEndUTC } }
+    ]
+  }).sort({ startTime: 1 });
+
+  const exams = await Promise.all(
+    todaysExams.map(async (exam) => {
+      const registrationCount = await ExamAssignment.countDocuments({ exam: exam._id });
+      return {
+        examId: exam._id,
+        title: exam.title,
+        startTime: exam.startTime,
+        registrationCount,
+        registrationOpen: isRegistrationOpen(exam),
+        registrationClosesAt: registrationClosesAt(exam)
+      };
+    })
+  );
+
+  const totalRegistrations = exams.reduce((sum, e) => sum + e.registrationCount, 0);
+  res.json({ exams, totalRegistrations });
+};

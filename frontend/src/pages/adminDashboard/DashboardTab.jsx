@@ -19,8 +19,11 @@ function ChartCard({ title, icon, canvasRef, caption, donutValue, donutLabel, wi
   );
 }
 
-export default function DashboardTab({ analytics, qualifyingPct }) {
+export default function DashboardTab({ analytics, qualifyingPct, todayRegistrations }) {
   const { hasData, rows, totalCandidates, totalAttempted, totalNotAttempted, totalQs, passedCount, failedCount, passRate, attemptRate, avgPct, scoreBrackets, completionBuckets, top, chrono } = analytics;
+
+  const todayExams = todayRegistrations?.exams || [];
+  const todayTotal = todayRegistrations?.totalRegistrations || 0;
 
   const passData = hasData ? [passedCount, failedCount] : [1, 1];
   const passColors = hasData ? ["#16a34a", "#dc2626"] : ["#e2e8f0", "#cbd5e1"];
@@ -90,6 +93,16 @@ export default function DashboardTab({ analytics, qualifyingPct }) {
       <div className="section-sub">Comprehensive visual analytics derived from Student submissions and Results Report criteria</div>
 
       <div className="stats-row">
+        <div className="stat-card" style={{ borderLeft: "4px solid #0891b2" }}>
+          <div>
+            <div className="stat-label">Today's Registrations</div>
+            <div className="stat-num" style={{ color: "#0891b2" }}>{todayTotal}</div>
+            <div className="small text-muted">
+              {todayExams.length > 0 ? `Across ${todayExams.length} exam${todayExams.length > 1 ? "s" : ""} today` : "No exam scheduled today"}
+            </div>
+          </div>
+          <div className="stat-icon candidates"><i className="fa-solid fa-user-plus"></i></div>
+        </div>
         <div className="stat-card" style={{ borderLeft: "4px solid #0284c7" }}>
           <div><div className="stat-label">Total Candidates</div><div className="stat-num">{totalCandidates}</div></div>
           <div className="stat-icon candidates"><i className="fa-solid fa-users"></i></div>
@@ -111,6 +124,29 @@ export default function DashboardTab({ analytics, qualifyingPct }) {
           <div className="stat-icon avg"><i className="fa-solid fa-chart-line"></i></div>
         </div>
       </div>
+
+      {todayExams.length > 0 && (
+        <div className="card-box">
+          <h6 className="mb-1"><i className="fa-solid fa-user-plus me-2 text-info"></i>Today's Registrations — Exam-wise</h6>
+          <div className="sub mb-3">Candidates registered so far for the exam(s) scheduled today, before their 12:00 AM cut-off</div>
+          <div className="d-flex flex-wrap gap-3">
+            {todayExams.map((e) => (
+              <div key={e.examId} className="d-flex align-items-center gap-3 px-3 py-2" style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#f8fafc", minWidth: 220 }}>
+                <div className="text-center" style={{ minWidth: 44 }}>
+                  <div className="fw-bold fs-4" style={{ color: "#0891b2", lineHeight: 1 }}>{e.registrationCount}</div>
+                  <div className="text-muted" style={{ fontSize: "0.7rem" }}>registered</div>
+                </div>
+                <div>
+                  <div className="fw-bold text-dark">{e.title}</div>
+                  <span className={`badge-pill ${e.registrationOpen ? "pass" : "fail"}`} style={{ fontSize: "0.7rem" }}>
+                    {e.registrationOpen ? "Registration open" : "Registration closed"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card-box">
         <div className="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">

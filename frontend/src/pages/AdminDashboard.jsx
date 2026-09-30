@@ -27,6 +27,7 @@ export default function AdminDashboard() {
   const [secondLevelResults, setSecondLevelResults] = useState([]);
   const [journey, setJourney] = useState([]);
   const [settings, setSettings] = useState({});
+  const [todayRegistrations, setTodayRegistrations] = useState({ exams: [], totalRegistrations: 0 });
   const [loaded, setLoaded] = useState(false);
 
   const adminEmail = sessionStorage.getItem("adminEmail") || "";
@@ -41,8 +42,9 @@ export default function AdminDashboard() {
       ExamAPI.adminGetSubmissions(),
       ExamAPI.adminGetSecondLevelResults(),
       ExamAPI.adminGetSettings(),
-      ExamAPI.adminGetCandidateJourney()
-    ]).then(([ex, sx, q, cq, st, sub, slr, set, journeyRows]) => {
+      ExamAPI.adminGetCandidateJourney(),
+      ExamAPI.adminGetTodayRegistrationStats()
+    ]).then(([ex, sx, q, cq, st, sub, slr, set, journeyRows, todayReg]) => {
       setExams(ex);
       setSecondExams(sx);
       setQuestions(q);
@@ -52,6 +54,7 @@ export default function AdminDashboard() {
       setSecondLevelResults(slr);
       setSettings(set);
       setJourney(journeyRows);
+      setTodayRegistrations(todayReg || { exams: [], totalRegistrations: 0 });
       setLoaded(true);
     });
   }, []);
@@ -126,7 +129,7 @@ export default function AdminDashboard() {
         </div>
 
         <div className="main-wrapper">
-          {activeTab === "dashboard" && <DashboardTab analytics={analytics} qualifyingPct={qualifyingPct} />}
+          {activeTab === "dashboard" && <DashboardTab analytics={analytics} qualifyingPct={qualifyingPct} todayRegistrations={todayRegistrations} />}
           {activeTab === "students" && <StudentsTab students={students} onDataChanged={loadAll} />}
           {activeTab === "examManagement" && (
             <ExamManagementTab

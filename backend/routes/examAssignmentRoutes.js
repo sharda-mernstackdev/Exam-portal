@@ -13,6 +13,7 @@ router.post('/exams/:examId/register', publicLimiter, ctrl.registerForExam);
 router.post('/exams/:examId/access', publicLimiter, ctrl.verifyExamAccess);
 
 // Admin — registration/attempt tracking for a given exam.
+router.get('/admin/exams/today-registrations', adminAuth, ctrl.getTodayRegistrationStats);
 router.get('/admin/exams/:examId/assignments', adminAuth, ctrl.listAssignmentsForExam);
 
 module.exports = router;

@@ -8,6 +8,10 @@ const EMPTY_CQ_FORM = {
   ex1In: "", ex1Out: "", ex2In: "", ex2Out: "", ex3In: "", ex3Out: ""
 };
 
+// Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
+// minutes, returns the computed end datetime-local string. Returns "" if
+// either input is missing/invalid. Mirrors the same helper in
+// ExamManagementTab.jsx used for Round 1's Test builder.
 function computeEndTime(startTimeStr, durationMinutes) {
   if (!startTimeStr || !durationMinutes) return "";
   const start = new Date(startTimeStr);
@@ -16,6 +20,8 @@ function computeEndTime(startTimeStr, durationMinutes) {
   return toDatetimeLocal(end);
 }
 
+// Formats a Date (or ISO string) as the "YYYY-MM-DDTHH:mm" value a
+// datetime-local input expects, in the browser's local time.
 function toDatetimeLocal(value) {
   if (!value) return "";
   const d = value instanceof Date ? value : new Date(value);
@@ -24,13 +30,15 @@ function toDatetimeLocal(value) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Colour themes cycled per Round 2 config card, same palette used for
+// Round 1's Test cards so both rounds feel visually consistent.
 const ROUND2_CARD_THEMES = [
-  { accent: "#4f46e5", dark: "#3730a3", bg: "#eef0ff", chipBg: "#e0e3ff" },
-  { accent: "#0d9488", dark: "#0f766e", bg: "#e9fbf8", chipBg: "#ccfbf1" },
-  { accent: "#d97706", dark: "#b45309", bg: "#fff8ec", chipBg: "#fef3c7" },
-  { accent: "#db2777", dark: "#be185d", bg: "#fff0f6", chipBg: "#fce7f3" },
-  { accent: "#059669", dark: "#047857", bg: "#ecfdf5", chipBg: "#d1fae5" },
-  { accent: "#2563eb", dark: "#1d4ed8", bg: "#eff6ff", chipBg: "#dbeafe" }
+  { accent: "#4f46e5", dark: "#3730a3", bg: "#eef0ff", chipBg: "#e0e3ff" }, // indigo
+  { accent: "#0d9488", dark: "#0f766e", bg: "#e9fbf8", chipBg: "#ccfbf1" }, // teal
+  { accent: "#d97706", dark: "#b45309", bg: "#fff8ec", chipBg: "#fef3c7" }, // amber
+  { accent: "#db2777", dark: "#be185d", bg: "#fff0f6", chipBg: "#fce7f3" }, // pink
+  { accent: "#059669", dark: "#047857", bg: "#ecfdf5", chipBg: "#d1fae5" }, // emerald
+  { accent: "#2563eb", dark: "#1d4ed8", bg: "#eff6ff", chipBg: "#dbeafe" }  // blue
 ];
 
 // Fixed set list for the Round 2 Question Bank's master/detail view — same
@@ -50,23 +58,50 @@ function toFuncName(title) {
   return camel || "solution" + Date.now();
 }
 
+const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" };
+
 export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsChanged, onCodingQuestionsChanged }) {
-  const [examForm, setExamForm] = useState({ examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" });
+  // ---- Second-level exam config form ----
+  const [examForm, setExamForm] = useState(EMPTY_EXAM_FORM);
+  const [editingExamId, setEditingExamId] = useState(null);
+
+  function startEditExam(ex) {
+    setEditingExamId(ex._id);
+    setExamForm({
+      examName: ex.title,
+      duration: String(ex.durationMinutes || ""),
+      testCases: "",
+      difficulty: ex.difficulty || "Medium",
+      startTime: toDatetimeLocal(ex.startTime),
+      endTime: toDatetimeLocal(ex.endTime)
+    });
+    document.getElementById("round2ExamFormAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function cancelEditExam() {
+    setEditingExamId(null);
+    setExamForm(EMPTY_EXAM_FORM);
+  }
 
   function handleExamSubmit(e) {
     e.preventDefault();
-    ExamAPI.adminCreateSecondLevelExam({
+    const payload = {
       title: examForm.examName.trim(),
       durationMinutes: Number(examForm.duration),
       difficulty: examForm.difficulty,
       startTime: examForm.startTime || undefined,
       endTime: examForm.endTime || undefined
-    })
+    };
+    const req = editingExamId
+      ? ExamAPI.adminUpdateSecondLevelExam(editingExamId, payload)
+      : ExamAPI.adminCreateSecondLevelExam(payload);
+    req
       .then(() => {
-        setExamForm({ examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" });
+        setEditingExamId(null);
+        setExamForm(EMPTY_EXAM_FORM);
         onSecondExamsChanged();
       })
-      .catch((err) => alert(err.message || "Could not create Round 2 exam config."));
+      .catch((err) => alert(err.message || "Could not save Round 2 exam config."));
   }
 
   function handleExamDelete(id) {
@@ -79,9 +114,34 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       .catch((err) => alert(err.message || "Could not update status."));
   }
 
+  // ---- "View registrations" (Round 2 has no per-exam registration step —
+  // any student who passes Round 1 becomes globally eligible, not tied to a
+  // specific config — so this shows the full list of Round-2-eligible
+  // candidates and their attempt status, same data for every config card). ----
+  const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
+  const [candidates, setCandidates] = useState([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
+
+  function toggleCandidates(examId) {
+    if (openCandidatesFor === examId) {
+      setOpenCandidatesFor(null);
+      return;
+    }
+    setOpenCandidatesFor(examId);
+    setCandidatesLoading(true);
+    ExamAPI.adminGetCandidateJourney()
+      .then((rows) => setCandidates(rows.filter((r) => r.round2Eligible)))
+      .catch((err) => alert(err.message || "Could not load candidates."))
+      .finally(() => setCandidatesLoading(false));
+  }
+
+  const ROUND2_STATUS_CLASS = { PASS: "pass", FAIL: "fail" };
+
+  // ---- Coding question form ----
   const [cqForm, setCqForm] = useState(EMPTY_CQ_FORM);
   const [editingId, setEditingId] = useState(null);
 
+  // ---- Coding question bank CSV import/export ----
   const csvInputRef = useRef(null);
   const [csvImportMsg, setCsvImportMsg] = useState("");
 
@@ -219,8 +279,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       <div className="section-heading">Exam - Round 2 (Technical/Coding)</div>
       <div className="section-sub">Manage test cases, coding questions, and eligible candidates</div>
 
-      <div className="card-box">
-        <h6>Create Test Cases Exam Configuration</h6>
+      <div className="card-box" id="round2ExamFormAnchor">
+        <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>
         <div className="sub">Set up a coding / test-cases round for shortlisted candidates</div>
         <form className="row g-3" onSubmit={handleExamSubmit}>
           <div className="col-md-4">
@@ -253,9 +313,14 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             </select>
             <div className="form-text">Candidates get this difficulty's question set below.</div>
           </div>
-          <div className="col-md-2 d-flex align-items-end">
-            <button type="submit" className="btn btn-dark w-100 fw-bold">+ Add Config</button>
+          <div className="col-md-2 d-flex align-items-end gap-2">
+            <button type="submit" className="btn btn-dark w-100 fw-bold">{editingExamId ? "Save Changes" : "+ Add Config"}</button>
           </div>
+          {editingExamId && (
+            <div className="col-12">
+              <button type="button" className="btn btn-outline-secondary btn-sm fw-bold" onClick={cancelEditExam}>Cancel Edit</button>
+            </div>
+          )}
 
           <div className="col-12"><hr className="my-1" /></div>
           <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
@@ -294,6 +359,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <div className="row g-3 mt-1">
             {secondExams.slice().reverse().map((ex, idx) => {
               const theme = ROUND2_CARD_THEMES[idx % ROUND2_CARD_THEMES.length];
+              const qCount = (questionsByDifficulty.get(ex.difficulty) || []).length;
               return (
                 <div className="col-md-6 col-lg-4" key={ex._id}>
                   <div className="test-card" style={{ borderTop: `5px solid ${theme.accent}`, background: theme.bg }}>
@@ -310,6 +376,10 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                       <div className="test-card-stat" style={{ borderColor: theme.accent }}>
                         <div className="test-card-stat-value" style={{ color: theme.dark }}>{ex.durationMinutes}</div>
                         <div className="test-card-stat-label">minutes</div>
+                      </div>
+                      <div className="test-card-stat" style={{ borderColor: theme.accent }}>
+                        <div className="test-card-stat-value" style={{ color: theme.dark }}>{qCount}</div>
+                        <div className="test-card-stat-label">questions</div>
                       </div>
                       {ex.difficulty && (
                         <span className="test-card-chip align-self-center" style={{ background: theme.chipBg, color: theme.dark }}>
@@ -336,11 +406,57 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                     </div>
 
                     <div className="d-flex flex-wrap gap-2 mt-3">
+                      <button type="button" className="btn-edit" onClick={() => startEditExam(ex)}>Edit</button>
+                      <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => toggleCandidates(ex._id)}>
+                        {openCandidatesFor === ex._id ? "Hide registrations" : "View registrations"}
+                      </button>
                       <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => handleExamToggleActive(ex)}>
                         {ex.active ? "Deactivate" : "Activate"}
                       </button>
                       <button type="button" className="btn-clear" onClick={() => handleExamDelete(ex._id)}>Delete</button>
                     </div>
+
+                    {openCandidatesFor === ex._id && (
+                      <div className="mt-3 pt-3 border-top">
+                        <div className="small fw-bold text-secondary mb-2">
+                          Round 2 eligible candidates <span className="text-muted fw-normal">(passed Round 1 — same list for every config, Round 2 has no per-config registration)</span>
+                        </div>
+                        {candidatesLoading ? (
+                          <div className="small text-muted">Loading...</div>
+                        ) : candidates.length === 0 ? (
+                          <div className="small text-muted">No candidates are eligible for Round 2 yet.</div>
+                        ) : (
+                          <div className="table-responsive">
+                            <table className="table candidates-table mb-0 align-middle">
+                              <thead>
+                                <tr><th>Name</th><th>Email</th><th>Round 1</th><th>Round 2</th><th>Final Status</th></tr>
+                              </thead>
+                              <tbody>
+                                {candidates.map((c) => (
+                                  <tr key={c.studentId}>
+                                    <td className="fw-bold text-dark">{c.name}</td>
+                                    <td className="small">{c.email}</td>
+                                    <td>
+                                      {c.round1 ? (
+                                        <span className={`badge-pill ${ROUND2_STATUS_CLASS[c.round1.status] || ""}`}>
+                                          {c.round1.status} ({c.round1.percentage}%)
+                                        </span>
+                                      ) : <span className="text-muted small">—</span>}
+                                    </td>
+                                    <td>
+                                      {c.round2 ? (
+                                        <span className={`badge-pill ${ROUND2_STATUS_CLASS[c.round2.status] || ""}`}>{c.round2.status}</span>
+                                      ) : <span className="text-muted small">Not attempted</span>}
+                                    </td>
+                                    <td className="small">{c.finalStatus || "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

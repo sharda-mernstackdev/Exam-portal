@@ -78,12 +78,12 @@ async function sendRound2InvitationEmail(student, round2AccessCode, window) {
 }
 
 async function sendFinalSuccessEmail(student) {
-  const html = wrapTemplate('Congratulations! You have successfully completed both assessment rounds', `
+  const html = wrapTemplate('Congratulations! You are eligible for the HR round', `
     <p>Dear ${student.fullName},</p>
-    <p>Congratulations — you have successfully cleared both <strong>Round 1</strong> and <strong>Round 2</strong> of the assessment.</p>
-    <p>Our team will be in touch with you regarding the next steps in the process.</p>
+    <p>Congratulations — you have <strong>passed Round 2</strong> and successfully cleared both <strong>Round 1</strong> and <strong>Round 2</strong> of the assessment.</p>
+    <p>You are eligible for the <strong>HR round</strong>, the final stage of the process. Our team will be in touch with you regarding the next steps.</p>
   `);
-  return sendMail({ to: student.email, subject: 'Congratulations! You have successfully completed both assessment rounds', html });
+  return sendMail({ to: student.email, subject: 'Congratulations! You are eligible for the HR round', html });
 }
 
 function formatDateTime(d) {

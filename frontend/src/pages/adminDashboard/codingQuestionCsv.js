@@ -52,7 +52,7 @@ export function buildCodingQuestionsCSV(questions) {
 
 export function downloadCodingQuestionsCSV(questions, filename = "round2-coding-questions.csv") {
   const csv = buildCodingQuestionsCSV(questions);
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM so Excel picks UTF-8
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }); // BOM so Excel picks UTF-8
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

@@ -9,7 +9,9 @@ exports.createSecondLevelResult = async (req, res) => {
     const student = await Student.findById(req.student.id);
     if (!student) return res.status(404).json({ message: 'Student record not found.' });
 
-    const round2Status = totalScore >= (Array.isArray(answers) ? answers.length : 1) / 2 ? 'PASS' : 'FAIL';
+    // Round 2 pass criteria: candidate must score at least 75% to clear
+    // Round 2 and be marked eligible for the final HR round.
+    const round2Status = totalScore >= (Array.isArray(answers) ? answers.length : 1) * 0.75 ? 'PASS' : 'FAIL';
 
     const result = await SecondLevelResult.create({
       student: student._id,

@@ -1,6 +1,18 @@
 const CodingQuestion = require('../models/CodingQuestion');
 const SecondLevelExam = require('../models/SecondLevelExam');
 
+// GET /api/coding-questions — student-facing, hides the `hidden: true` test cases' expected output?
+// (kept simple: still needed client-side to run visible examples; hidden test cases are still required
+// for scoring so we return everything but the frontend must not display hidden ones in the UI.)
+//
+// The Round 2 question bank is organised into three sets by `difficulty`
+// (Easy/Medium/Hard). Whichever set the currently active Round 2 exam
+// config was created with (its own `difficulty` field, chosen in the
+// "Create Test Cases Exam Configuration" form) is the set every candidate
+// gets here — same "current active SecondLevelExam" lookup used elsewhere
+// (submissionController) to pick which Round 2 config is live right now.
+// A config with no difficulty set (or none configured yet) falls back to
+// the full active bank, so nothing breaks for exams created before this.
 exports.listActiveCodingQuestions = async (req, res) => {
   const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
   const filter = { active: true };
@@ -35,6 +47,10 @@ exports.deleteCodingQuestion = async (req, res) => {
   res.json({ message: 'Coding question deleted.' });
 };
 
+// POST /api/admin/coding-questions/bulk — CSV import for the Round 2 bank.
+// Dedupes by title (same approach as the Round 1 question bank's bulk
+// import) so re-uploading an edited CSV only adds the new rows instead of
+// refusing outright once the bank has anything in it.
 exports.bulkCreateCodingQuestions = async (req, res) => {
   try {
     const items = Array.isArray(req.body.questions) ? req.body.questions : [];

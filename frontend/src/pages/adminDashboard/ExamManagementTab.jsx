@@ -2,6 +2,7 @@ import { Fragment, useRef, useState } from "react";
 import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
 import { downloadQuestionsCSV, parseQuestionsCSV } from "./questionCsv";
+import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
 const FRONTEND_URL = window.location.origin;
@@ -188,8 +189,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       active: testForm.status === "Active",
       sectionIds: testForm.sectionIds,
       examDate: testForm.examDate || undefined,
-      startTime: testForm.startTime || undefined,
-      endTime: testForm.endTime || undefined,
+      startTime: toISTISOString(testForm.startTime) || undefined,
+      endTime: toISTISOString(testForm.endTime) || undefined,
       loginWindowMinutes: Number(testForm.loginWindowMinutes) || 5,
       instructions: testForm.instructions.trim() || undefined
     };
@@ -448,10 +449,9 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
 
             <div className="col-md-3">
               <label className="form-label small fw-bold text-secondary">Exam Start</label>
-              <input type="datetime-local" className="form-control"
+              <DateTimePicker
                 value={testForm.startTime}
-                onChange={(e) => {
-                  const startTime = e.target.value;
+                onChange={(startTime) => {
                   setTestForm((prev) => ({
                     ...prev,
                     startTime,
@@ -464,8 +464,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               <label className="form-label small fw-bold text-secondary">
                 Exam End <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
               </label>
-              <input type="datetime-local" className="form-control"
-                value={testForm.endTime} onChange={(e) => setTestForm({ ...testForm, endTime: e.target.value })} />
+              <DateTimePicker
+                value={testForm.endTime} onChange={(endTime) => setTestForm({ ...testForm, endTime })} />
             </div>
             <div className="col-md-6">
               <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>

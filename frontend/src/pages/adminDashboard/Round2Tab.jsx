@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
 import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV } from "./codingQuestionCsv";
+import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
 const EMPTY_CQ_FORM = {
   title: "", difficulty: "Medium", description: "", correctOutput: "",
@@ -89,8 +90,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       title: examForm.examName.trim(),
       durationMinutes: Number(examForm.duration),
       difficulty: examForm.difficulty,
-      startTime: examForm.startTime || undefined,
-      endTime: examForm.endTime || undefined
+      startTime: toISTISOString(examForm.startTime) || undefined,
+      endTime: toISTISOString(examForm.endTime) || undefined
     };
     const req = editingExamId
       ? ExamAPI.adminUpdateSecondLevelExam(editingExamId, payload)
@@ -326,10 +327,9 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
           <div className="col-md-4">
             <label className="form-label small fw-bold text-secondary">Access Opens</label>
-            <input type="datetime-local" className="form-control"
+            <DateTimePicker
               value={examForm.startTime}
-              onChange={(e) => {
-                const startTime = e.target.value;
+              onChange={(startTime) => {
                 setExamForm((prev) => ({
                   ...prev,
                   startTime,
@@ -341,8 +341,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             <label className="form-label small fw-bold text-secondary">
               Access Closes <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
             </label>
-            <input type="datetime-local" className="form-control"
-              value={examForm.endTime} onChange={(e) => setExamForm({ ...examForm, endTime: e.target.value })} />
+            <DateTimePicker
+              value={examForm.endTime} onChange={(endTime) => setExamForm({ ...examForm, endTime })} />
           </div>
           <div className="col-md-4 d-flex align-items-end">
             <div className="form-text mb-2">Candidates who pass Round 1 can only log in to Round 2 between these times. Leave blank for always-open access.</div>

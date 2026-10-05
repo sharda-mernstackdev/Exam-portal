@@ -336,7 +336,6 @@
     border-radius: 8px;
   }
 
-
   /* Tables */
   table.candidates-table thead {
     background-color: var(--brand-dark);
@@ -452,4 +451,47 @@
     }
     .sidebar .menu-item { width: auto; flex: 1 1 auto; justify-content: center; }
     .sidebar .menu-item.logout { border-top: none; margin-top: 0; }
+  }
+
+  /* Locale-independent Day/Month/Year and Hour/Minute/AM-PM picker used
+     across Round 1 and Round 2 exam scheduling forms (DateTimePicker.jsx).
+     Each row of selects is grouped into one bordered "pill" so it reads as
+     a single compact control instead of three cramped dropdown boxes. */
+  .dt-picker-row {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    padding: 3px 8px;
+    gap: 2px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .dt-picker-row:focus-within {
+    border-color: #4f46e5;
+    box-shadow: 0 0 0 0.2rem rgba(79, 70, 229, 0.15);
+  }
+  .dt-picker-seg {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 6px 3px !important;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--brand-dark-subtle);
+    cursor: pointer;
+  }
+  .dt-picker-seg:focus {
+    outline: none;
+  }
+  .dt-picker-sep {
+    color: #94a3b8;
+    font-weight: 700;
+    padding: 0 1px;
+    user-select: none;
+  }
+  .dt-picker-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.03em;
   }

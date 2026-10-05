@@ -1,11 +1,24 @@
 import { Fragment, useRef, useState } from "react";
 import ExamAPI from "../../api";
-import { formatDate } from "./analytics";
+// import { formatDate } from "./analytics";
 import { downloadQuestionsCSV, parseQuestionsCSV } from "./questionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
 const FRONTEND_URL = window.location.origin;
+
+// Shows dates as DD-MM-YYYY hh:mm AM/PM in IST, same on every computer.
+// Example: 06-10-2026 12:00 PM
+function formatDate(value) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "-";
+  const date = d
+    .toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Asia/Kolkata" })
+    .replace(/\//g, "-");
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
+  return `${date} ${time}`;
+}
 
 // Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
 // minutes, returns the computed end datetime-local string. Returns "" if
@@ -447,7 +460,7 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
             <div className="col-12"><hr className="my-1" /></div>
             <div className="col-12 small fw-bold text-uppercase text-secondary">Scheduled session (optional — leave blank for an always-open test)</div>
 
-            <div className="col-md-3">
+            <div className="col-md-4">
               <label className="form-label small fw-bold text-secondary">Exam Start</label>
               <DateTimePicker
                 value={testForm.startTime}
@@ -460,14 +473,14 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                   }));
                 }} />
             </div>
-            <div className="col-md-3">
+            <div className="col-md-4">
               <label className="form-label small fw-bold text-secondary">
                 Exam End <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
               </label>
               <DateTimePicker
                 value={testForm.endTime} onChange={(endTime) => setTestForm({ ...testForm, endTime })} />
             </div>
-            <div className="col-md-6">
+            <div className="col-md-4">
               <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
               <input type="number" className="form-control" min="1" placeholder="5"
                 value={testForm.loginWindowMinutes} onChange={(e) => setTestForm({ ...testForm, loginWindowMinutes: e.target.value })} />

@@ -86,14 +86,22 @@ async function sendFinalSuccessEmail(student) {
   return sendMail({ to: student.email, subject: 'Congratulations! You are eligible for the HR round', html });
 }
 
+// Every exam date/time in this portal is a wall-clock IST time (see
+// IST_OFFSET_MS in examAssignmentController.js), so these MUST format with
+// an explicit `timeZone: 'Asia/Kolkata'` — without it, toLocaleDateString/
+// toLocaleTimeString fall back to whatever timezone the Node process itself
+// is running in. On a cloud host that's usually UTC, which silently showed
+// candidates a time 5.5 hours earlier than the real IST exam time (e.g. a
+// 2:45 PM IST exam emailed out as "09:15 AM") even though the stored time
+// itself was correct all along.
 function formatDateTime(d) {
   if (!d) return '-';
   const dt = new Date(d);
-  return dt.toLocaleDateString('en-US', { day: '2-digit', month: 'long', year: 'numeric' });
+  return dt.toLocaleDateString('en-US', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 }
 function formatTime(d) {
   if (!d) return '-';
-  return new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 }
 
 // Sent right after a student registers via the exam-specific registration

@@ -147,7 +147,7 @@ exports.round2Login = async (req, res) => {
       const windowEnd = new Date(secondExam.endTime);
       if (now < windowStart) {
         return res.status(403).json({
-          message: `Round 2 access has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}.`
+          message: `Round 2 access has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}.`
         });
       }
       if (now > windowEnd) {

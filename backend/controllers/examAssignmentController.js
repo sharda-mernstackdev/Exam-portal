@@ -104,7 +104,7 @@ exports.registerForExam = async (req, res) => {
     if (!isRegistrationOpen(exam)) {
       const closesAt = registrationClosesAt(exam);
       return res.status(403).json({
-        message: `Registration for this exam closed at 12:00 AM on the exam day (${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}). Please contact the administrator.`
+        message: `Registration for this exam closed at 12:00 AM on the exam day (${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}). Please contact the administrator.`
       });
     }
 
@@ -193,7 +193,7 @@ exports.verifyExamAccess = async (req, res) => {
 
       if (!alreadyStarted && now < windowStart) {
         return res.status(403).json({
-          message: `The login window has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}.`
+          message: `The login window has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}.`
         });
       }
       if (!alreadyStarted && now > new Date(exam.startTime)) {

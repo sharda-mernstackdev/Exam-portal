@@ -129,8 +129,9 @@ export default function StudentRegister({ examId: examIdProp }) {
                   })
                 : "the scheduled cut-off"}
             </strong>{" "}
-            — at 12:00 AM (midnight) on the day of the exam. Please contact
-            the administrator if you still need access.
+            — registration closes 15 minutes before midnight on the day
+            before the exam. Please contact the administrator if you still
+            need access.
           </p>
         </div>
       </div>
@@ -219,7 +220,8 @@ export default function StudentRegister({ examId: examIdProp }) {
                   {formatTime(exam.startTime)}. Registration is open only
                   till{" "}
                   <strong>
-                    12:00 AM on {formatDate(exam.registrationClosesAt)}
+                    {formatTime(exam.registrationClosesAt)} on{" "}
+                    {formatDate(exam.registrationClosesAt)}
                   </strong>
                   — after that, registration cannot be done.
                 </div>

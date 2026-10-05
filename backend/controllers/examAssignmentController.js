@@ -20,26 +20,29 @@ function generateAccessCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-// Registration always closes at 12:00 AM (midnight) on the exam's own day —
-// no matter what time the exam itself starts. E.g. an exam on 30 Sep at
-// 1:30 PM stops accepting registrations the moment 30 Sep begins (i.e. the
-// last valid moment to register is 29 Sep 11:59:59 PM). This is fixed to
+// Registration closes at 11:45 PM (IST) on the day BEFORE the exam — a
+// 15-minute-earlier buffer ahead of the exam day's midnight. E.g. an exam on
+// 6 Oct at 2:45 PM stops accepting registrations at 5 Oct 11:45 PM IST (the
+// last valid moment to register is 5 Oct 11:44:59 PM). This is fixed to
 // India time (IST, UTC+5:30 — no DST) since that's this portal's audience,
 // so it doesn't drift with the server's own timezone. Returns null for a
 // Test with no scheduled startTime (an always-open test has no cut-off).
 const IST_OFFSET_MS = 5.5 * 60 * 60000;
+const REGISTRATION_BUFFER_MS = 15 * 60000;
 function registrationClosesAt(exam) {
   if (!exam.startTime) return null;
   const start = new Date(exam.startTime);
   // Shift the start instant into IST wall-clock, take that calendar day's
   // midnight, then shift back to a real UTC instant — this is the actual
   // moment "12:00 AM IST on the exam's date" occurs, regardless of the
-  // server's own local timezone.
+  // server's own local timezone. Then step back 15 minutes so registration
+  // actually closes at 11:45 PM IST the day before.
   const istWallClock = new Date(start.getTime() + IST_OFFSET_MS);
   const istMidnightUTC = Date.UTC(
     istWallClock.getUTCFullYear(), istWallClock.getUTCMonth(), istWallClock.getUTCDate(), 0, 0, 0
   );
-  return new Date(istMidnightUTC - IST_OFFSET_MS);
+  const midnightUTC = istMidnightUTC - IST_OFFSET_MS;
+  return new Date(midnightUTC - REGISTRATION_BUFFER_MS);
 }
 function isRegistrationOpen(exam) {
   const closesAt = registrationClosesAt(exam);
@@ -57,7 +60,7 @@ exports.getCurrentRegistrationExam = async (req, res) => {
   const testFilter = { active: true, 'sectionIds.0': { $exists: true } };
 
   // Prefer a Test that's still actually open for registration (i.e. before
-  // midnight IST on its own exam day). Falling back to "exam hasn't ended
+  // 11:45 PM IST the day before its own exam day). Falling back to "exam hasn't ended
   // yet" (even if registration already closed) or finally to any active
   // Test keeps the root URL working the way it always has for admins
   // previewing things, while candidates land on the right (possibly
@@ -97,14 +100,14 @@ exports.registerForExam = async (req, res) => {
       return res.status(404).json({ message: 'This exam is not available for registration.' });
     }
 
-    // ---- Registration cut-off (12:00 AM on the exam's own day) ----
+    // ---- Registration cut-off (11:45 PM the day before the exam) ----
     // This is the real security boundary — never trust the frontend to have
     // hidden the form in time. A student hitting this endpoint directly
     // after the cut-off must still be rejected here.
     if (!isRegistrationOpen(exam)) {
       const closesAt = registrationClosesAt(exam);
       return res.status(403).json({
-        message: `Registration for this exam closed at 12:00 AM on the exam day (${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}). Please contact the administrator.`
+        message: `Registration for this exam closed on ${closesAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}. Please contact the administrator.`
       });
     }
 
@@ -237,7 +240,7 @@ exports.listAssignmentsForExam = async (req, res) => {
 // registered so far for the exam(s) scheduled "today" (IST calendar day),
 // so the admin can see, at a glance on the Executive Dashboard, whether
 // enough people have signed up before today's registration window closes
-// at midnight. Only combined Tests (sectionIds present) are registration
+// at 11:45 PM. Only combined Tests (sectionIds present) are registration
 // targets — a raw question-set section is never registered for directly.
 exports.getTodayRegistrationStats = async (req, res) => {
   const now = new Date();

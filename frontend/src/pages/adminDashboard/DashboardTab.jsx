@@ -128,8 +128,7 @@ export default function DashboardTab({ analytics, qualifyingPct, todayRegistrati
       {todayExams.length > 0 && (
         <div className="card-box">
           <h6 className="mb-1"><i className="fa-solid fa-user-plus me-2 text-info"></i>Today's Registrations — Exam-wise</h6>
-          <div className="sub mb-3">Candidates registered so far for the exam(s) scheduled today, before their 12:00 AM cut-off</div>
-          <div className="d-flex flex-wrap gap-3">
+<div className="sub mb-3">Candidates registered so far for the exam(s) scheduled today, before their registration cut-off (11:45 PM the day before)</div>          <div className="d-flex flex-wrap gap-3">
             {todayExams.map((e) => (
               <div key={e.examId} className="d-flex align-items-center gap-3 px-3 py-2" style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#f8fafc", minWidth: 220 }}>
                 <div className="text-center" style={{ minWidth: 44 }}>

@@ -2,8 +2,7 @@ const Submission = require('../models/Submission');
 const Student = require('../models/Student');
 const Settings = require('../models/Settings');
 const ExamAssignment = require('../models/ExamAssignment');
-const SecondLevelExam = require('../models/SecondLevelExam');
-const { sendRound2InvitationEmail } = require('../utils/mailer');
+const { computeRound2EmailDueAt } = require('../utils/round2Scheduler');
 
 // POST /api/submissions — student submits round 1 (dashboard.html "Complete Exam")
 exports.createSubmission = async (req, res) => {
@@ -11,6 +10,14 @@ exports.createSubmission = async (req, res) => {
     const { questions, userAnswers } = req.body;
     if (!Array.isArray(questions) || questions.length === 0) {
       return res.status(400).json({ message: 'questions[] is required.' });
+    }
+
+    // One attempt only: once this candidate's Round 1 is Completed, any
+    // further submission (replayed request, second device, Back button) is
+    // refused instead of creating a duplicate result.
+    const alreadyDone = await ExamAssignment.exists({ student: req.student.id, round: 1, status: 'Completed' });
+    if (alreadyDone) {
+      return res.status(409).json({ message: 'You have already completed this exam. Multiple attempts are not allowed.' });
     }
 
     let score = 0;
@@ -47,23 +54,17 @@ exports.createSubmission = async (req, res) => {
     student.roundProgress.r1 = round1Status;
 
     // ---- Round 2 eligibility (server-side source of truth) ----
-    // A FAIL always clears eligibility, even if a previous attempt had
-    // passed — the most recent Round 1 attempt decides. A PASS sets
-    // eligibility and triggers the invitation email exactly once (dedup'd
-    // via round2EmailSentAt) so retaking/resubmitting Round 1 never spams
-    // the candidate with repeat invitations.
-    let round2EmailResult = null;
+    // A FAIL clears eligibility. A PASS sets eligibility and schedules the
+    // Round 2 invitation for 15 minutes after Round 1 ends (the background
+    // scheduler in utils/round2Scheduler.js sends it, exactly once), so
+    // candidates are not told the result the moment they submit.
     if (round1Status === 'PASS') {
       student.round2Eligible = true;
       if (!student.round2EmailSentAt) {
-        const settingsDoc2 = settingsDoc || (await Settings.findOne({ key: 'portal' }));
-        const round2Code = settingsDoc2 && settingsDoc2.round2AccessCode;
-        if (round2Code) {
-          const secondExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
-          const window = secondExam ? { startTime: secondExam.startTime, endTime: secondExam.endTime } : null;
-          round2EmailResult = await sendRound2InvitationEmail(student, round2Code, window);
-          student.round2EmailSentAt = new Date();
-        }
+        const r1Assignment = await ExamAssignment.findOne({ student: student._id, round: 1 })
+          .sort({ updatedAt: -1 })
+          .populate('exam', 'endTime');
+        student.round2EmailDueAt = computeRound2EmailDueAt(r1Assignment && r1Assignment.exam);
       }
     } else {
       student.round2Eligible = false;
@@ -77,7 +78,7 @@ exports.createSubmission = async (req, res) => {
       { $set: { status: 'Completed', completedAt: new Date() } }
     );
 
-    res.status(201).json({ submission, round1Status, score, percentage, round2EmailSent: !!(round2EmailResult && round2EmailResult.sent) });
+    res.status(201).json({ submission, round1Status, score, percentage, round2EmailSent: false });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Could not save submission.' });

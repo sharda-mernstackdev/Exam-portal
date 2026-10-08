@@ -2,15 +2,18 @@ const jwt = require('jsonwebtoken');
 const Student = require('../models/Student');
 const Exam = require('../models/Exam');
 const ExamAssignment = require('../models/ExamAssignment');
+const Settings = require('../models/Settings');
 const { sendExamInvitationEmail } = require('../utils/mailer');
+const { startSingleSession, isLoggedInElsewhere } = require('../utils/session');
+const { lateLoginDeadline } = require('../utils/examWindow');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^[0-9]{10}$/;
 
-function signStudentToken(student) {
+function signStudentToken(student, sid) {
   return jwt.sign(
-    { id: student._id, email: student.email, name: student.fullName, role: 'student' },
+    { id: student._id, email: student.email, name: student.fullName, role: 'student', sid },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '6h' }
   );
@@ -84,6 +87,7 @@ exports.getPublicExamInfo = async (req, res) => {
     startTime: exam.startTime,
     endTime: exam.endTime,
     loginWindowMinutes: exam.loginWindowMinutes,
+    examMode: exam.examMode || 'campus',
     instructions: exam.instructions,
     registrationOpen: isRegistrationOpen(exam),
     registrationClosesAt: registrationClosesAt(exam)
@@ -125,7 +129,33 @@ exports.registerForExam = async (req, res) => {
       return res.status(400).json({ message: 'Please enter a valid 10-digit mobile number.' });
     }
 
+    // ---- One registration per candidate per exam ----
+    // A candidate who has already registered for this exam (same email, or
+    // the same mobile number under any email) cannot register again — no
+    // second invitation, no second access code. Checked BEFORE anything is
+    // created or updated.
     let student = await Student.findOne({ email });
+    if (student) {
+      const existing = await ExamAssignment.findOne({ student: student._id, exam: exam._id });
+      if (existing) {
+        return res.status(409).json({
+          message: 'This email is already registered for this exam. You cannot register again. Please use the exam link sent to your email.'
+        });
+      }
+    }
+    const samePhoneStudents = await Student.find({ phone }, '_id');
+    if (samePhoneStudents.length) {
+      const phoneUsed = await ExamAssignment.exists({
+        exam: exam._id,
+        student: { $in: samePhoneStudents.map((s) => s._id) }
+      });
+      if (phoneUsed) {
+        return res.status(409).json({
+          message: 'This mobile number is already registered for this exam. You cannot register again.'
+        });
+      }
+    }
+
     if (!student) {
       student = await Student.create({ fullName, email, phone });
     } else {
@@ -134,12 +164,7 @@ exports.registerForExam = async (req, res) => {
       await student.save();
     }
 
-    let assignment = await ExamAssignment.findOne({ student: student._id, exam: exam._id });
-    if (assignment) {
-      return res.status(409).json({ message: 'You are already registered for this exam. Please check your email for the invitation.' });
-    }
-
-    assignment = await ExamAssignment.create({
+    const assignment = await ExamAssignment.create({
       student: student._id,
       exam: exam._id,
       round: 1,
@@ -180,7 +205,12 @@ exports.verifyExamAccess = async (req, res) => {
     const assignment = await ExamAssignment.findOne({ student: student._id, exam: exam._id });
     if (!assignment) return res.status(404).json({ message: 'No registration found for this email on this exam.' });
 
-    if (assignment.accessCode.toUpperCase() !== accessCode.toUpperCase()) {
+    // Only the access code the admin currently has set in Settings
+    // (Candidate Access Code, Round 1) is accepted — the same code that is
+    // printed in the invitation email and that the admin gives out directly.
+    const portal = await Settings.findOne({ key: 'portal' }).lean();
+    const currentCode = ((portal && portal.accessCode) || assignment.accessCode || '').toUpperCase();
+    if (accessCode.toUpperCase() !== currentCode) {
       return res.status(401).json({ message: 'Incorrect access code. Please check your invitation email.' });
     }
 
@@ -193,20 +223,34 @@ exports.verifyExamAccess = async (req, res) => {
     if (exam.startTime) {
       const windowStart = new Date(new Date(exam.startTime).getTime() - (exam.loginWindowMinutes || 5) * 60000);
       const alreadyStarted = assignment.status === 'InProgress';
+      const deadline = lateLoginDeadline(exam);
 
       if (!alreadyStarted && now < windowStart) {
         return res.status(403).json({
           message: `The login window has not opened yet. You may log in from ${windowStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}.`
         });
       }
-      if (!alreadyStarted && now > new Date(exam.startTime)) {
+      // Login closes at the deadline from utils/examWindow.js (the exam start
+      // time) — for EVERYONE, including a candidate who already opened the
+      // link before (status InProgress). Nobody may sign in after this point.
+      if (deadline && now > deadline) {
         return res.status(403).json({
-          message: 'Exam access time has expired. You were required to start the examination before the scheduled start time.'
+          message: `Login is closed. Exam access was only available until ${deadline.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}.`
         });
       }
-      if (exam.endTime && now > new Date(exam.endTime) && !alreadyStarted) {
+      if (exam.endTime && now > new Date(exam.endTime)) {
         return res.status(403).json({ message: 'This exam has already ended.' });
       }
+    }
+
+    // ---- One device at a time ----
+    // If this candidate is already signed in (and active) on another
+    // device, refuse this sign-in instead of logging the first one out.
+    const deviceId = String(req.body.deviceId || '').slice(0, 64);
+    if (isLoggedInElsewhere(student, deviceId)) {
+      return res.status(409).json({
+        message: 'You are already logged in on another device. Please continue the exam on that device. If it was closed, wait about one minute and try again.'
+      });
     }
 
     if (assignment.status !== 'InProgress') {
@@ -215,7 +259,10 @@ exports.verifyExamAccess = async (req, res) => {
       await assignment.save();
     }
 
-    const token = signStudentToken(student);
+    // Fresh session for this device (see utils/session.js). Only reached when
+    // no OTHER device is currently active, so nobody gets signed out here.
+    const sid = await startSingleSession(student, deviceId);
+    const token = signStudentToken(student, sid);
     res.json({
       token,
       student: { id: student._id, fullName: student.fullName, email: student.email, phone: student.phone },

@@ -21,6 +21,13 @@ const ExamSchema = new mongoose.Schema(
     startDate: { type: Date },
     endDate: { type: Date },
     active: { type: Boolean, default: true },
+    // How the exam ends for candidates:
+    //   'online'  — a candidate may finish and submit any time before the end
+    //               time (online / remote exam).
+    //   'campus'  — the exam can only be submitted when the timer / scheduled
+    //               end time is reached (campus drive, everyone ends together).
+    // Existing exams without this field behave as 'campus' (the previous rule).
+    examMode: { type: String, enum: ['online', 'campus'], default: 'campus' },
     // ---- Combined "Test" support ----
     // When non-empty, this Exam record represents a combined Test built by
     // picking existing section exams (each an independent question-set

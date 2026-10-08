@@ -1,5 +1,7 @@
 const Question = require('../models/Question');
 const Exam = require('../models/Exam');
+const ExamAssignment = require('../models/ExamAssignment');
+const { paperLoadDeadline } = require('../utils/examWindow');
 
 // Looks up whether `category` has an exam target set, and how many
 // questions already exist for it. Returns null if no exam matches this
@@ -88,8 +90,82 @@ function shuffleForStudent(questions, studentId) {
   return shuffled;
 }
 
+// ---- Per-student OPTION shuffling ----
+// Same idea as the question shuffle above, one level down: each student sees
+// a question's options (A/B/C/D) in their own order, so a neighbour can't
+// copy "the answer is C". Seeded from student id + question id, so it stays
+// identical across reloads for that student. `correctOption` is remapped to
+// the new position, so scoring (which compares the answer index against
+// correctOption) keeps working unchanged.
+// Rules:
+//  - "All of the above" / "None of these" style options stay exactly where
+//    they were (usually last); only the OTHER options are shuffled around them.
+//  - If an option refers to others by letter ("Both A and B", "Option C"),
+//    the question is left in its original order, since shuffling would
+//    change its meaning.
+const PINNED_OPTION_RE = /\b(all|none|both|neither)\b.*\b(above|these|following)\b/i;
+const LETTER_REF_RE = /\b(both|either|only)?\s*\(?[A-D]\)?\s*(and|&|,|or)\s*\(?[A-D]\)?(?![a-z])|\boption\s*\(?[A-Da-d]\)?\b/;
+
+function shuffleOptions(question, studentId) {
+  const q = typeof question.toObject === 'function' ? question.toObject() : { ...question };
+  const opts = Array.isArray(q.options) ? q.options : [];
+  if (!studentId || opts.length < 2) return q;
+  if (opts.some((o) => LETTER_REF_RE.test(String(o)))) return q;
+
+  // order[newPos] = oldIndex. Pinned options keep their slot.
+  const pinnedIdx = new Set();
+  opts.forEach((o, i) => { if (PINNED_OPTION_RE.test(String(o))) pinnedIdx.add(i); });
+  const freeIdx = opts.map((_, i) => i).filter((i) => !pinnedIdx.has(i));
+  if (freeIdx.length < 2) return q;
+
+  const rand = mulberry32(hashSeed(`${studentId}:${q._id}:options`));
+  const shuffledFree = freeIdx.slice();
+  for (let i = shuffledFree.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [shuffledFree[i], shuffledFree[j]] = [shuffledFree[j], shuffledFree[i]];
+  }
+
+  const order = [];
+  let f = 0;
+  for (let pos = 0; pos < opts.length; pos++) {
+    order.push(pinnedIdx.has(pos) ? pos : shuffledFree[f++]);
+  }
+  q.options = order.map((i) => opts[i]);
+  q.correctOption = order.indexOf(Number(q.correctOption));
+  return q;
+}
+
+function prepareForStudent(questions, studentId) {
+  return shuffleForStudent(questions, studentId).map((q) => shuffleOptions(q, studentId));
+}
+
 // GET /api/questions — public/student facing, used by dashboard.html to load the exam
 exports.listActiveQuestions = async (req, res) => {
+  // A candidate who has already completed Round 1 must never be able to load
+  // the paper again (e.g. via the browser Back button or a still-valid
+  // token) and start the exam a second time.
+  const studentIdForCheck = req.student && req.student.id;
+  if (studentIdForCheck) {
+    const finished = await ExamAssignment.exists({ student: studentIdForCheck, round: 1, status: 'Completed' });
+    if (finished) {
+      return res.status(409).json({ message: 'You have already completed this exam. It cannot be started again.' });
+    }
+  }
+
+  // Late-entry cut-off, enforced here too: a token obtained inside the login
+  // window must not let someone open the paper once login has closed.
+  if (studentIdForCheck) {
+    const current = await ExamAssignment.findOne({ student: studentIdForCheck, round: 1, status: 'InProgress' })
+      .sort({ startedAt: -1 })
+      .populate('exam', 'startTime');
+    const deadline = current && current.exam ? paperLoadDeadline(current.exam) : null;
+    if (deadline && new Date() > deadline) {
+      return res.status(403).json({
+        message: 'Exam entry is closed. The exam could only be opened until its scheduled start time.'
+      });
+    }
+  }
+
   const questions = await Question.find({ active: true }).sort({ createdAt: 1 });
   const exams = await Exam.find({}, 'title active sectionIds');
 
@@ -103,7 +179,7 @@ exports.listActiveQuestions = async (req, res) => {
       activeTest.sectionIds.map((s) => s.title.trim().toLowerCase())
     );
     const visible = questions.filter((q) => allowedCategories.has((q.category || '').trim().toLowerCase()));
-    return res.json(shuffleForStudent(visible, studentId));
+    return res.json(prepareForStudent(visible, studentId));
   }
 
   // No Test configured — original behaviour: only exclude a question if its
@@ -117,7 +193,7 @@ exports.listActiveQuestions = async (req, res) => {
   );
   const visible = questions.filter((q) => !inactiveCategories.has((q.category || '').trim().toLowerCase()));
 
-  res.json(shuffleForStudent(visible, studentId));
+  res.json(prepareForStudent(visible, studentId));
 };
 
 // GET /api/admin/questions — full bank for the admin question-bank UI

@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const Settings = require('../models/Settings');
 
 let transporter = null;
 
@@ -109,7 +110,11 @@ function formatTime(d) {
 // email + access code already embedded), and the login-window instructions.
 async function sendExamInvitationEmail(student, exam, assignment) {
   const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const link = `${baseUrl}/exam-access/${exam._id}?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(assignment.accessCode)}`;
+  // The code shown in the email is the Round 1 access code the admin sets in
+  // Settings (the same one the admin sees), not a per-student random code.
+  const portal = await Settings.findOne({ key: 'portal' }).lean();
+  const accessCode = (portal && portal.accessCode) || assignment.accessCode;
+  const link = `${baseUrl}/exam-access/${exam._id}?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(accessCode)}`;
   const windowStart = new Date(new Date(exam.startTime).getTime() - (exam.loginWindowMinutes || 5) * 60000);
 
   const html = wrapTemplate(`Campus Recruitment Exam – Round ${assignment.round} Exam Invitation`, `
@@ -121,10 +126,10 @@ async function sendExamInvitationEmail(student, exam, assignment) {
       <tr><td style="padding: 8px 0; color: #64748b;">Exam time</td><td style="padding: 8px 0; text-align: right;">${formatTime(exam.startTime)} – ${formatTime(exam.endTime)}</td></tr>
       <tr><td style="padding: 8px 0; color: #64748b;">Login window</td><td style="padding: 8px 0; text-align: right; font-weight: bold; color: #b91c1c;">${formatTime(windowStart)} – ${formatTime(exam.startTime)}</td></tr>
       <tr><td style="padding: 8px 0; color: #64748b;">Exam link</td><td style="padding: 8px 0; text-align: right;"><a href="${link}">${link}</a></td></tr>
-      <tr><td style="padding: 8px 0; color: #64748b;">Access code</td><td style="padding: 8px 0; text-align: right; font-weight: bold; letter-spacing: 1px;">${assignment.accessCode}</td></tr>
+      <tr><td style="padding: 8px 0; color: #64748b;">Access code</td><td style="padding: 8px 0; text-align: right; font-weight: bold; letter-spacing: 1px;">${accessCode}</td></tr>
     </table>
     <p style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px 16px; color: #991b1b;">
-      <strong>Important:</strong> you must log in during the login window shown above (before the exam start time). If you do not log in before the exam starts, you will not be permitted to begin the examination.
+      <strong>Important:</strong> you must log in during the login window shown above (it opens before the exam and closes at the exam start time). After the window closes, login is not possible and you will not be permitted to begin the examination.
     </p>
     <p>Please ensure a stable internet connection, a working webcam, and a quiet environment before your login window begins.</p>
   `);

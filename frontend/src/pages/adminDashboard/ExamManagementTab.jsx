@@ -1,24 +1,11 @@
 import { Fragment, useRef, useState } from "react";
 import ExamAPI from "../../api";
-// import { formatDate } from "./analytics";
+import { formatDate } from "./analytics";
 import { downloadQuestionsCSV, parseQuestionsCSV } from "./questionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
 const EMPTY_QUESTION_FORM = { category: "", text: "", optA: "", optB: "", optC: "", optD: "", correct: "0" };
 const FRONTEND_URL = window.location.origin;
-
-// Shows dates as DD-MM-YYYY hh:mm AM/PM in IST, same on every computer.
-// Example: 06-10-2026 12:00 PM
-function formatDate(value) {
-  if (!value) return "-";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return "-";
-  const date = d
-    .toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Asia/Kolkata" })
-    .replace(/\//g, "-");
-  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
-  return `${date} ${time}`;
-}
 
 // Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
 // minutes, returns the computed end datetime-local string. Returns "" if
@@ -45,7 +32,8 @@ function toDatetimeLocal(value) {
 
 const EMPTY_TEST_FORM = {
   name: "", status: "Active", sectionIds: [],
-  examDate: "", startTime: "", endTime: "", loginWindowMinutes: "5", instructions: ""
+  examDate: "", startTime: "", endTime: "", loginWindowMinutes: "5", instructions: "",
+  examMode: "campus"
 };
 
 const EMPTY_EXAM_FORM = { examName: "", duration: "", totalQuestions: "", status: "Active" };
@@ -148,7 +136,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       startTime: toDatetimeLocal(t.startTime),
       endTime: toDatetimeLocal(t.endTime),
       loginWindowMinutes: String(t.loginWindowMinutes || 5),
-      instructions: t.instructions || ""
+      instructions: t.instructions || "",
+      examMode: t.examMode || "campus"
     });
     window.scrollTo({ top: document.getElementById("testBuilderAnchor")?.offsetTop - 100 || 0, behavior: "smooth" });
   }
@@ -205,7 +194,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       startTime: toISTISOString(testForm.startTime) || undefined,
       endTime: toISTISOString(testForm.endTime) || undefined,
       loginWindowMinutes: Number(testForm.loginWindowMinutes) || 5,
-      instructions: testForm.instructions.trim() || undefined
+      instructions: testForm.instructions.trim() || undefined,
+      examMode: testForm.examMode || "campus"
     };
     const req = editingTestId ? ExamAPI.adminUpdateExam(editingTestId, payload) : ExamAPI.adminCreateExam(payload);
     req
@@ -422,7 +412,7 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               </select>
             </div>
 
-            <div className="col-md-9">
+            <div className="col-md-5">
               <label className="form-label small fw-bold text-secondary">Add Question Set</label>
               <select className="form-select" value={pendingSectionId} onChange={(e) => setPendingSectionId(e.target.value)}>
                 <option value="">Select a question set...</option>
@@ -431,8 +421,15 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                 ))}
               </select>
             </div>
-            <div className="col-md-3 d-flex align-items-end">
+            <div className="col-md-2 d-flex align-items-end">
               <button type="button" className="btn btn-outline-dark w-100 fw-bold" disabled={!pendingSectionId} onClick={addTestSection}>+ Add</button>
+            </div>
+            <div className="col-md-5">
+              <label className="form-label small fw-bold text-secondary">Exam Mode</label>
+              <select className="form-select" value={testForm.examMode} onChange={(e) => setTestForm({ ...testForm, examMode: e.target.value })}>
+                <option value="online">Online exam — students can submit early</option>
+                <option value="campus">Campus drive — submit only at end time</option>
+              </select>
             </div>
 
             {selectedSections.length > 0 && (
@@ -539,6 +536,14 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                         <><i className="fa-solid fa-calendar-days me-2" style={{ color: theme.accent }}></i>{formatDate(t.startTime)}</>
                       ) : (
                         <span className="text-muted"><i className="fa-solid fa-calendar-xmark me-2"></i>Not scheduled</span>
+                      )}
+                    </div>
+
+                    <div className="test-card-schedule mt-2">
+                      {t.examMode === "online" ? (
+                        <><i className="fa-solid fa-laptop me-2" style={{ color: theme.accent }}></i>Online Exam</>
+                      ) : (
+                        <><i className="fa-solid fa-building-columns me-2" style={{ color: theme.accent }}></i>Campus Drive</>
                       )}
                     </div>
 

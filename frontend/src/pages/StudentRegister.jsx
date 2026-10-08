@@ -241,7 +241,7 @@ export default function StudentRegister({ examId: examIdProp }) {
                   <div className="text-danger mt-1">
                     <i className="fa-solid fa-triangle-exclamation me-2"></i>
                     Login opens {exam.loginWindowMinutes || 5} minutes before
-                    start time.
+                    start time and closes at the start time.
                   </div>
                 </div>
                 {exam.instructions && (

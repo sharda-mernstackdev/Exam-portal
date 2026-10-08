@@ -9,16 +9,38 @@ function getToken(req) {
 
 // Verifies a student JWT. Used to guard dashboard.html / second_level_exam.html
 // on the server side (fixes the "skip straight to the exam" bypass bug).
-function studentAuth(req, res, next) {
+async function studentAuth(req, res, next) {
   const token = getToken(req);
   if (!token) return res.status(401).json({ message: 'Not logged in. Please log in again.' });
+
+  let payload;
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    payload = jwt.verify(token, process.env.JWT_SECRET);
     if (payload.role !== 'student') throw new Error('wrong role');
+  } catch (err) {
+    return res.status(401).json({ message: 'Session expired or invalid. Please log in again.' });
+  }
+
+  // Single-device check: the token must carry the student's CURRENT session
+  // id. A token without one (issued before this rule existed) or with an old
+  // one (the student signed in again on another device) is rejected.
+  try {
+    const student = payload.sid
+      ? await Student.findById(payload.id).select('activeSessionId').lean()
+      : null;
+    if (!student || student.activeSessionId !== payload.sid) {
+      return res.status(401).json({
+        message: 'You have been signed out because this account was opened on another device (or your session is no longer valid). Please log in again using your exam link.'
+      });
+    }
+    // Heartbeat: marks this session as live so a second device is refused
+    // while this one is in use (see utils/session.js).
+    Student.updateOne({ _id: payload.id }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
     req.student = payload;
     next();
   } catch (err) {
-    return res.status(401).json({ message: 'Session expired or invalid. Please log in again.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Could not verify your session.' });
   }
 }
 

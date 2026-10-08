@@ -11,6 +11,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const studentRoutes = require('./routes/studentRoutes');
 const examAssignmentRoutes = require('./routes/examAssignmentRoutes');
+const { startRound2Scheduler } = require('./utils/round2Scheduler');
 
 const app = express();
 
@@ -54,4 +55,5 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
   app.listen(PORT, () => console.log(`[server] Exam Portal API running on http://localhost:${PORT}`));
+  startRound2Scheduler();
 });

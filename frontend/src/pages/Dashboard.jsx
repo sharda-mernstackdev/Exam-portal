@@ -43,6 +43,10 @@ export default function Dashboard() {
   const [timeLeft, setTimeLeft] = useState(30 * 60);
   const [submitting, setSubmitting] = useState(false);
   const [calcDisplay, setCalcDisplay] = useState("0");
+  const examEndRef = useRef(null); // scheduled exam end time (ms), if known
+  // true for an "online" exam (candidate may finish early); false for a
+  // "campus" exam, where Complete stays locked until the end time.
+  const [earlySubmitAllowed, setEarlySubmitAllowed] = useState(false);
 
   // Load the live question bank once the session is verified.
   useEffect(() => {
@@ -75,6 +79,31 @@ export default function Dashboard() {
         navigate("/login", { replace: true });
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  // Browser Back button is disabled during the exam: every Back press just
+  // pushes the exam page straight back, so a candidate can't navigate away.
+  useEffect(() => {
+    if (!ready) return undefined;
+    window.history.pushState(null, "", window.location.href);
+    function onPopState() {
+      window.history.pushState(null, "", window.location.href);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [ready]);
+
+  // Learn this exam's scheduled end time (for the "online" deadline below).
+  useEffect(() => {
+    if (!ready) return;
+    const examId = localStorage.getItem("examId");
+    if (!examId) return;
+    ExamAPI.getPublicExamInfo(examId)
+      .then((e) => {
+        if (e && e.endTime) examEndRef.current = new Date(e.endTime).getTime();
+        setEarlySubmitAllowed(!!e && e.examMode === "online");
+      })
+      .catch(() => { /* no deadline info -> plain duration timer */ });
   }, [ready]);
 
   const categories = useMemo(() => {
@@ -155,6 +184,15 @@ export default function Dashboard() {
       })
       .catch((err) => {
         setSubmitting(false);
+        // 401 = signed out (opened on another device), 409 = already
+        // completed: neither can succeed by retrying, so end the session.
+        if (err.status === 401 || err.status === 409) {
+          localStorage.removeItem("examStatus");
+          localStorage.removeItem("studentToken");
+          alert(err.message || "Your session has ended.");
+          navigate("/login", { replace: true });
+          return;
+        }
         alert(err.message || "Could not submit your exam. Please check your connection and try again.");
       });
   }
@@ -179,6 +217,14 @@ export default function Dashboard() {
   useEffect(() => {
     if (!ready || !questions) return undefined;
     if (timeLeft <= 0) {
+      submitRef.current();
+      return undefined;
+    }
+    // Online: the exam closes at its scheduled end time even if the personal
+    // timer still has minutes left. Offline: this check is skipped, so a
+    // candidate who loses connection keeps their full remaining timer
+    // (the local countdown keeps running) and is submitted when it ends.
+    if (examEndRef.current && navigator.onLine && Date.now() >= examEndRef.current) {
       submitRef.current();
       return undefined;
     }
@@ -377,13 +423,23 @@ export default function Dashboard() {
 
               <hr className="my-4" />
 
-              <button className="btn btn-danger w-100 py-2 fw-bold" disabled={submitting} onClick={submitExam}>
+              {/* Campus drive: locked until the timer reaches 00:00 — the exam then
+                  auto-submits (the countdown effect above). Online exam: the
+                  candidate may finish and submit early. */}
+              <button className="btn btn-danger w-100 py-2 fw-bold" disabled={submitting || (!earlySubmitAllowed && timeLeft > 0)} onClick={submitExam}>
                 {submitting ? (
                   <><i className="fa-solid fa-spinner fa-spin me-2"></i>Submitting...</>
+                ) : !earlySubmitAllowed && timeLeft > 0 ? (
+                  <><i className="fa-solid fa-lock me-2"></i>Complete Exam</>
                 ) : (
                   <><i className="fa-solid fa-paper-plane me-2"></i>Complete Exam</>
                 )}
               </button>
+              {!earlySubmitAllowed && timeLeft > 0 && (
+                <div className="text-center text-muted small mt-2">
+                  Available when the timer ends ({minutes}:{seconds} left)
+                </div>
+              )}
             </div>
           </div>
         </div>

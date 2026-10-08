@@ -12,6 +12,22 @@ function formatTime(d) {
   return new Date(d).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
+// A random id kept in this browser's storage. The server uses it to tell "same
+// device logging in again" (allowed) from "a second device" (refused while the
+// first one is still active).
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem("deviceId");
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2));
+      localStorage.setItem("deviceId", id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
+
 export default function ExamAccessGate() {
   const { examId } = useParams();
   const [searchParams] = useSearchParams();
@@ -34,13 +50,15 @@ export default function ExamAccessGate() {
   function handleStart() {
     setStarting(true);
     setAccessError("");
-    ExamAPI.verifyExamAccess(examId, { email, accessCode: code })
+    ExamAPI.verifyExamAccess(examId, { email, accessCode: code, deviceId: getDeviceId() })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);
         localStorage.setItem("candidateEmail", data.student.email);
         localStorage.setItem("candidatePhone", data.student.phone);
         localStorage.setItem("examStatus", "locked");
+        // Remembered so the exam page can enforce this exam's scheduled end time.
+        localStorage.setItem("examId", examId);
         // Hands off into the existing, unchanged instructions -> exam flow.
         navigate("/instructions", { replace: true });
       })
@@ -72,7 +90,13 @@ export default function ExamAccessGate() {
     );
   }
 
-  if (!exam) return null;
+  if (!exam) {
+    return (
+      <div style={pageStyle}>
+        <div className="spinner-border text-light" role="status"></div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageStyle}>

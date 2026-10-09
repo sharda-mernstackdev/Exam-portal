@@ -72,7 +72,9 @@ function logEvent(type, detail, flash) {
  * watches for a covered/dark camera, no face, multiple faces, tab
  * switching, and window blur — logging each to localStorage + the backend.
  *
- * options.warnings (default false): when true (the exam page), face problems
+ * options.quiet (default false): when true (campus exams) no on-screen flash
+ *   messages are shown at all; events are only logged.
+ * options.warnings (default false): when true (online exams only), face problems
  *   — candidate not visible / moved to the side / looking away, or another
  *   person in the camera — raise a visible WARNING (1 of 3, 2 of 3, 3 of 3).
  *   The third warning calls options.onLimit() (the exam page auto-submits).
@@ -102,12 +104,14 @@ export function useProctor(active, options) {
   const faceSeenRef = useRef(false);
   const badRef = useRef({ reason: null, since: 0 });
   const limitReachedRef = useRef(false);
+  const landmarkerLoadingRef = useRef(false);
 
   useEffect(() => {
     if (!active) return undefined;
     stoppedRef.current = false;
 
     function flash(msg) {
+      if (optionsRef.current.quiet) return; // campus exam: no on-screen warnings
       const warnEl = warnElRef.current;
       if (!warnEl) return;
       warnEl.textContent = "⚠ " + msg;
@@ -324,8 +328,19 @@ export function useProctor(active, options) {
         return;
       }
 
+      // Face warnings are switched on later (once the exam mode is known), so
+      // the landmark model is loaded the first time warnings are wanted.
+      if (optionsRef.current.warnings && !landmarkerRef.current && !landmarkerLoadingRef.current) {
+        landmarkerLoadingRef.current = true;
+        loadLandmarker()
+          .then((lm) => {
+            if (!stoppedRef.current) landmarkerRef.current = lm;
+          })
+          .catch(() => { /* keep the basic fallback checks */ });
+      }
+
       // Preferred: MediaPipe face landmarks (works in every modern browser).
-      if (landmarkerRef.current) {
+      if (optionsRef.current.warnings && landmarkerRef.current) {
         try {
           const result = landmarkerRef.current.detectForVideo(video, performance.now());
           judgeFaces(result);
@@ -390,18 +405,8 @@ export function useProctor(active, options) {
         }
       }
 
-      // Face warnings need the landmark model; load it in the background and
-      // switch over to it as soon as it is ready.
-      if (optionsRef.current.warnings) {
-        loadLandmarker()
-          .then((lm) => {
-            if (!stoppedRef.current) landmarkerRef.current = lm;
-          })
-          .catch(() => { /* keep the basic fallback checks */ });
-      }
-
       clearInterval(timerRef.current);
-      timerRef.current = setInterval(tick, optionsRef.current.warnings ? CHECK_EVERY_MS : 2000);
+      timerRef.current = setInterval(tick, CHECK_EVERY_MS);
     }
 
     function retry() {

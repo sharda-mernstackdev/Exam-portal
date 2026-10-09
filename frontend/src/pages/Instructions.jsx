@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useExamGuard } from "../hooks/useExamGuard";
-import { useProctor } from "../hooks/useProctor";
 import { useSessionGuard } from "../hooks/useSessionGuard";
 import FullscreenGate from "../components/FullscreenGate";
 import LiveClock from "../components/LiveClock";
@@ -9,6 +8,16 @@ import ExamAPI from "../api";
 
 // Minimum time the candidate gets to read the rules (seconds).
 const READ_SECONDS = 10;
+
+// Laptop / desktop only. Phones and tablets are blocked (iPads that report
+// themselves as a Mac are caught by the touch-points check).
+function isMobileDevice() {
+  const ua = navigator.userAgent || "";
+  if (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk|Kindle|PlayBook|BlackBerry|IEMobile|Opera Mini|webOS/i.test(ua)) return true;
+  if (navigator.userAgentData && navigator.userAgentData.mobile) return true;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
 
 function fmtCountdown(totalSec) {
   const t = Math.max(0, Math.ceil(totalSec));
@@ -35,7 +44,66 @@ export default function Instructions() {
   }
 
   const { fullscreen, enter } = useExamGuard(ready, handleLockdownViolation);
-  useProctor(ready);
+  const mobileDevice = isMobileDevice();
+
+  // ---- Camera check (permission + device) ----
+  // This page only CHECKS that a camera is connected and allowed. It does no
+  // face detection and shows no warnings — monitoring starts on the exam page.
+  // Without a working camera the candidate cannot go past this page.
+  // status: checking | ok | denied | nocamera | busy | unsupported | lost
+  const [camStatus, setCamStatus] = useState("checking");
+  const camStreamRef = useRef(null);
+
+  function stopCamStream() {
+    if (camStreamRef.current) {
+      camStreamRef.current.getTracks().forEach((t) => t.stop());
+      camStreamRef.current = null;
+    }
+  }
+
+  function checkCamera() {
+    stopCamStream();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCamStatus("unsupported");
+      return;
+    }
+    setCamStatus("checking");
+    navigator.mediaDevices
+      .getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false })
+      .then((s) => {
+        camStreamRef.current = s;
+        s.getVideoTracks().forEach((t) => {
+          t.addEventListener("ended", () => setCamStatus("lost"));
+        });
+        setCamStatus("ok");
+      })
+      .catch((err) => {
+        const name = err && err.name;
+        if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") setCamStatus("nocamera");
+        else if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") setCamStatus("busy");
+        else setCamStatus("denied");
+      });
+  }
+
+  useEffect(() => {
+    if (!ready || mobileDevice) return undefined;
+    checkCamera();
+    function onDeviceChange() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      navigator.mediaDevices.enumerateDevices().then((list) => {
+        if (!list.some((d) => d.kind === "videoinput")) setCamStatus("lost");
+      }).catch(() => {});
+    }
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
+    }
+    return () => {
+      if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+        navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
+      }
+      stopCamStream();
+    };
+  }, [ready, mobileDevice]);
 
   // ---- Timing ----
   // The exam opens at its scheduled start time, not 10 seconds after the
@@ -84,7 +152,8 @@ export default function Instructions() {
   const startLeft = startMs ? Math.max(0, (startMs - serverNow) / 1000) : 0;
   const waitingForStart = startLeft > 0;
   const readDone = readLeft <= 0;
-  const canStart = ready && infoLoaded && readDone && !waitingForStart;
+  const camOk = camStatus === "ok";
+  const canStart = ready && !mobileDevice && camOk && infoLoaded && readDone && !waitingForStart;
 
   useEffect(() => {
     if (canStart) navigate("/dashboard", { replace: true });
@@ -116,6 +185,21 @@ export default function Instructions() {
 
   if (!ready) return null;
 
+  // Phones and tablets cannot take the exam.
+  if (mobileDevice) {
+    return (
+      <div style={{ background: "#0f172a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe UI', Tahoma, sans-serif", padding: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 14, maxWidth: 480, width: "100%", padding: 32, textAlign: "center", boxShadow: "0 20px 50px rgba(0,0,0,.4)" }}>
+          <div style={{ fontSize: "2.4rem", color: "#dc2626" }}><i className="fa-solid fa-mobile-screen-button"></i></div>
+          <h4 style={{ marginTop: 12, color: "#0f172a", fontWeight: 700 }}>Mobile devices are not allowed</h4>
+          <p style={{ color: "#475569", lineHeight: 1.6 }}>
+            This exam cannot be taken on a mobile phone or tablet. Please open the exam link on a laptop or desktop computer with a working webcam.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!fullscreen) {
     return (
       <FullscreenGate
@@ -124,6 +208,36 @@ export default function Instructions() {
         message="You must enable Fullscreen Mode to view exam instructions and proceed."
         buttonLabel="Enable Fullscreen & Proceed"
       />
+    );
+  }
+
+  // No camera (or access not allowed) -> the candidate cannot continue.
+  if (!camOk) {
+    const msgs = {
+      checking: ["Checking your camera…", "Please click \"Allow\" when the browser asks for camera access."],
+      denied: ["Camera access is blocked", "Allow camera access for this site (click the camera / lock icon in the address bar → Allow), then press \"Try Again\"."],
+      nocamera: ["No camera found", "No webcam is connected to this computer. Connect a working webcam, then press \"Try Again\". Without a camera you cannot take this exam."],
+      busy: ["Camera is in use", "Another app or browser tab is using your camera. Close it, then press \"Try Again\"."],
+      unsupported: ["Camera not supported", "This browser cannot access the camera. Open the exam link in the latest Google Chrome or Edge using the https:// address."],
+      lost: ["Camera disconnected", "Your camera was turned off or unplugged. Reconnect it and press \"Try Again\". You cannot continue without a camera."]
+    };
+    const [title, text] = msgs[camStatus] || msgs.denied;
+    return (
+      <div style={{ background: "#0f172a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe UI', Tahoma, sans-serif", padding: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 14, maxWidth: 480, width: "100%", padding: 32, textAlign: "center", boxShadow: "0 20px 50px rgba(0,0,0,.4)" }}>
+          <div style={{ fontSize: "2.4rem", color: camStatus === "checking" ? "#2a5298" : "#dc2626" }}>
+            <i className={camStatus === "checking" ? "fa-solid fa-video" : "fa-solid fa-video-slash"}></i>
+          </div>
+          <h4 style={{ marginTop: 12, color: "#0f172a", fontWeight: 700 }}>{title}</h4>
+          <p style={{ color: "#475569", lineHeight: 1.6 }}>{text}</p>
+          <p style={{ color: "#64748b", fontSize: ".85rem" }}>A working, allowed camera is required for this proctored exam.</p>
+          {camStatus !== "checking" && (
+            <button className="btn btn-primary px-4" onClick={checkCamera}>
+              <i className="fa-solid fa-rotate me-2"></i>Try Again
+            </button>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -191,6 +305,7 @@ export default function Instructions() {
 
               <div className="card-footer bg-light p-3 px-4 d-flex justify-content-between align-items-center">
                 <span className="text-muted small">
+                  <i className="fa-solid fa-video text-success me-1"></i>Camera connected&nbsp;&nbsp;
                   <i className="fa-solid fa-lock me-1"></i>Exam will begin automatically at the scheduled start time.
                 </span>
                 <span className="badge bg-primary px-3 py-2">

@@ -2,6 +2,7 @@ const Question = require('../models/Question');
 const Exam = require('../models/Exam');
 const ExamAssignment = require('../models/ExamAssignment');
 const { paperLoadDeadline } = require('../utils/examWindow');
+const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 
 // Allowance for network delay / tiny clock differences when the exam opens.
 const START_TOLERANCE_MS = 3000;
@@ -144,6 +145,11 @@ function prepareForStudent(questions, studentId) {
 
 // GET /api/questions — public/student facing, used by dashboard.html to load the exam
 exports.listActiveQuestions = async (req, res) => {
+  // The paper is never served to a phone or tablet.
+  if (isMobileRequest(req)) {
+    return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
+  }
+
   // A candidate who has already completed Round 1 must never be able to load
   // the paper again (e.g. via the browser Back button or a still-valid
   // token) and start the exam a second time.

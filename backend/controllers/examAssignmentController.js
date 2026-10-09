@@ -5,6 +5,7 @@ const ExamAssignment = require('../models/ExamAssignment');
 const Settings = require('../models/Settings');
 const { sendExamInvitationEmail } = require('../utils/mailer');
 const { startSingleSession, isLoggedInElsewhere } = require('../utils/session');
+const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { lateLoginDeadline } = require('../utils/examWindow');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
@@ -227,6 +228,11 @@ exports.verifyExamAccess = async (req, res) => {
 
     if (assignment.status === 'Completed') {
       return res.status(409).json({ message: 'You have already completed this exam.' });
+    }
+
+    // Laptop / desktop only — phones and tablets cannot start the exam.
+    if (isMobileRequest(req)) {
+      return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
     }
 
     // ---- Time window enforcement ----

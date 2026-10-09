@@ -32,9 +32,6 @@ export default function Dashboard() {
   }
 
   const { fullscreen, enter } = useExamGuard(ready, handleLockdownViolation);
-  // Camera warnings (not visible / looking away / extra person): 3 warnings,
-  // then the exam is submitted automatically.
-  useProctor(ready, { warnings: true, onLimit: () => submitRef.current() });
 
   const [questions, setQuestions] = useState(null); // null = loading
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -49,6 +46,15 @@ export default function Dashboard() {
   // true for an "online" exam (candidate may finish early); false for a
   // "campus" exam, where Complete stays locked until the end time.
   const [earlySubmitAllowed, setEarlySubmitAllowed] = useState(false);
+
+  // Camera warnings (not visible / looking away / extra person): 3 warnings,
+  // then auto-submit — ONLINE exams only. A campus exam always runs until its
+  // end time, so it never shows camera warnings or submits because of them.
+  useProctor(ready, {
+    warnings: earlySubmitAllowed,
+    quiet: !earlySubmitAllowed,
+    onLimit: () => submitRef.current()
+  });
 
   // Load the live question bank once the session is verified.
   useEffect(() => {

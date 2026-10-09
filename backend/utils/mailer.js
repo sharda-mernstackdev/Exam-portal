@@ -3,6 +3,17 @@ const Settings = require('../models/Settings');
 
 let transporter = null;
 
+// Builds the public site address used in every mail link. The value comes from
+// FRONTEND_URL, which hosting panels often save with a stray space / newline /
+// quotes (that is what put a space after ".com" in the link). We remove ALL
+// whitespace and quotes, add https:// if it was left out, and drop trailing "/".
+function getBaseUrl() {
+  let url = String(process.env.FRONTEND_URL || 'http://localhost:5173')
+    .replace(/[\s"'`]+/g, '');
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  return url.replace(/\/+$/, '');
+}
+
 function getTransporter() {
   if (transporter) return transporter;
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
@@ -53,7 +64,7 @@ function wrapTemplate(title, bodyHtml) {
 }
 
 async function sendRound2InvitationEmail(student, round2AccessCode, window) {
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const baseUrl = getBaseUrl();
   const link = `${baseUrl}/round2-login?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2AccessCode)}`;
   const windowRow = (window && window.startTime && window.endTime)
     ? `<tr><td style="padding: 8px 0; color: #64748b;">Login window</td><td style="padding: 8px 0; text-align: right; font-weight: bold; color: #b91c1c;">${formatTime(window.startTime)} – ${formatTime(window.endTime)}</td></tr>`
@@ -109,7 +120,7 @@ function formatTime(d) {
 // link. Contains the scheduled exam window, the exam-access link (with
 // email + access code already embedded), and the login-window instructions.
 async function sendExamInvitationEmail(student, exam, assignment) {
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const baseUrl = getBaseUrl();
   // The code shown in the email is the Round 1 access code the admin sets in
   // Settings (the same one the admin sees), not a per-student random code.
   const portal = await Settings.findOne({ key: 'portal' }).lean();

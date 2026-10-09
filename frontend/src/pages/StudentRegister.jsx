@@ -102,9 +102,17 @@ export default function StudentRegister({ examId: examIdProp }) {
     );
   }
 
-  if (!exam) return null;
+  if (!exam) {
+    return (
+      <div style={pageStyle}>
+        <div className="spinner-border text-light" role="status"></div>
+      </div>
+    );
+  }
 
   if (exam.registrationOpen === false) {
+    const notStarted = !!exam.registrationNotStarted;
+    const when = notStarted ? exam.registrationOpensAt : exam.registrationClosesAt;
     return (
       <div style={pageStyle}>
         <div
@@ -117,21 +125,21 @@ export default function StudentRegister({ examId: examIdProp }) {
             maxWidth: 480,
           }}
         >
-          <i className="fa-solid fa-lock fa-3x mb-3 text-danger"></i>
-          <h5 className="fw-bold">Registration Closed</h5>
+          <i className={`fa-solid ${notStarted ? "fa-hourglass-start text-warning" : "fa-lock text-danger"} fa-3x mb-3`}></i>
+          <h5 className="fw-bold">{notStarted ? "Registration Not Started" : "Registration Closed"}</h5>
           <p className="text-muted mb-0">
-            Registration for <strong>{exam.title}</strong> closed on{" "}
+            Registration for <strong>{exam.title}</strong>{" "}
+            {notStarted ? "opens on" : "closed on"}{" "}
             <strong>
-              {exam.registrationClosesAt
-                ? new Date(exam.registrationClosesAt).toLocaleString("en-US", {
+              {when
+                ? new Date(when).toLocaleString("en-US", {
                     dateStyle: "medium",
                     timeStyle: "short",
+                    timeZone: "Asia/Kolkata",
                   })
-                : "the scheduled cut-off"}
-            </strong>{" "}
-            — registration closes 15 minutes before midnight on the day
-            before the exam. Please contact the administrator if you still
-            need access.
+                : "the scheduled time"}
+            </strong>
+            .{notStarted ? "" : " Please contact the administrator if you still need access."}
           </p>
         </div>
       </div>

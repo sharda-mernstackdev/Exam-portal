@@ -18,6 +18,11 @@ const ExamSchema = new mongoose.Schema(
     startTime: { type: Date },
     endTime: { type: Date },
     loginWindowMinutes: { type: Number, default: 5 },
+    // ---- Registration window (set by the admin when creating the exam) ----
+    // Students can register only between these two moments. If the end time
+    // is left empty, registration stays open until the exam starts.
+    registrationStartTime: { type: Date },
+    registrationEndTime: { type: Date },
     startDate: { type: Date },
     endDate: { type: Date },
     active: { type: Boolean, default: true },

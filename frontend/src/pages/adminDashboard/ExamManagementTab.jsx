@@ -33,7 +33,8 @@ function toDatetimeLocal(value) {
 const EMPTY_TEST_FORM = {
   name: "", status: "Active", sectionIds: [],
   examDate: "", startTime: "", endTime: "", loginWindowMinutes: "5", instructions: "",
-  examMode: "campus"
+  examMode: "campus",
+  registrationStartTime: "", registrationEndTime: ""
 };
 
 const EMPTY_EXAM_FORM = { examName: "", duration: "", totalQuestions: "", status: "Active" };
@@ -137,7 +138,9 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       endTime: toDatetimeLocal(t.endTime),
       loginWindowMinutes: String(t.loginWindowMinutes || 5),
       instructions: t.instructions || "",
-      examMode: t.examMode || "campus"
+      examMode: t.examMode || "campus",
+      registrationStartTime: toDatetimeLocal(t.registrationStartTime),
+      registrationEndTime: toDatetimeLocal(t.registrationEndTime)
     });
     window.scrollTo({ top: document.getElementById("testBuilderAnchor")?.offsetTop - 100 || 0, behavior: "smooth" });
   }
@@ -186,6 +189,11 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       alert("Add at least one question set to this test.");
       return;
     }
+    if (testForm.registrationStartTime && testForm.registrationEndTime &&
+        new Date(testForm.registrationEndTime) <= new Date(testForm.registrationStartTime)) {
+      alert("Registration End must be after Registration Start.");
+      return;
+    }
     const payload = {
       title: testForm.name.trim(),
       active: testForm.status === "Active",
@@ -195,7 +203,9 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       endTime: toISTISOString(testForm.endTime) || undefined,
       loginWindowMinutes: Number(testForm.loginWindowMinutes) || 5,
       instructions: testForm.instructions.trim() || undefined,
-      examMode: testForm.examMode || "campus"
+      examMode: testForm.examMode || "campus",
+      registrationStartTime: toISTISOString(testForm.registrationStartTime) || null,
+      registrationEndTime: toISTISOString(testForm.registrationEndTime) || null
     };
     const req = editingTestId ? ExamAPI.adminUpdateExam(editingTestId, payload) : ExamAPI.adminCreateExam(payload);
     req
@@ -481,6 +491,23 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
               <input type="number" className="form-control" min="1" placeholder="5"
                 value={testForm.loginWindowMinutes} onChange={(e) => setTestForm({ ...testForm, loginWindowMinutes: e.target.value })} />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label small fw-bold text-secondary">Registration Start</label>
+              <DateTimePicker
+                value={testForm.registrationStartTime}
+                onChange={(registrationStartTime) => setTestForm({ ...testForm, registrationStartTime })} />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label small fw-bold text-secondary">
+                Registration End <span className="text-muted fw-normal">(blank = until exam starts)</span>
+              </label>
+              <DateTimePicker
+                value={testForm.registrationEndTime}
+                onChange={(registrationEndTime) => setTestForm({ ...testForm, registrationEndTime })} />
+            </div>
+            <div className="col-md-4 d-flex align-items-end">
+              <div className="small text-muted">Students can register only between these two times.</div>
             </div>
             <div className="col-12">
               <label className="form-label small fw-bold text-secondary">Instructions (shown on registration page)</label>

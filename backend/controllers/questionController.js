@@ -3,6 +3,9 @@ const Exam = require('../models/Exam');
 const ExamAssignment = require('../models/ExamAssignment');
 const { paperLoadDeadline } = require('../utils/examWindow');
 
+// Allowance for network delay / tiny clock differences when the exam opens.
+const START_TOLERANCE_MS = 3000;
+
 // Looks up whether `category` has an exam target set, and how many
 // questions already exist for it. Returns null if no exam matches this
 // category (in which case there's no cap — old free-form categories keep
@@ -152,13 +155,24 @@ exports.listActiveQuestions = async (req, res) => {
     }
   }
 
-  // Late-entry cut-off, enforced here too: a token obtained inside the login
-  // window must not let someone open the paper once login has closed.
+  // Start/entry window, enforced here too: the paper can only be loaded from
+  // the scheduled start time (small tolerance for network delay) until the
+  // late-entry cut-off. A token obtained inside the login window must not
+  // let someone open the paper before the exam starts, or after entry closed.
   if (studentIdForCheck) {
     const current = await ExamAssignment.findOne({ student: studentIdForCheck, round: 1, status: 'InProgress' })
       .sort({ startedAt: -1 })
       .populate('exam', 'startTime');
-    const deadline = current && current.exam ? paperLoadDeadline(current.exam) : null;
+    const exam = current && current.exam;
+    if (exam && exam.startTime) {
+      const startMs = new Date(exam.startTime).getTime();
+      if (Date.now() < startMs - START_TOLERANCE_MS) {
+        return res.status(403).json({
+          message: 'The exam has not started yet. It will open automatically at the scheduled start time.'
+        });
+      }
+    }
+    const deadline = exam ? paperLoadDeadline(exam) : null;
     if (deadline && new Date() > deadline) {
       return res.status(403).json({
         message: 'Exam entry is closed. The exam could only be opened until its scheduled start time.'

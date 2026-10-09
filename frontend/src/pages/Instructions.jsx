@@ -5,6 +5,18 @@ import { useProctor } from "../hooks/useProctor";
 import { useSessionGuard } from "../hooks/useSessionGuard";
 import FullscreenGate from "../components/FullscreenGate";
 import LiveClock from "../components/LiveClock";
+import ExamAPI from "../api";
+
+// Minimum time the candidate gets to read the rules (seconds).
+const READ_SECONDS = 10;
+
+function fmtCountdown(totalSec) {
+  const t = Math.max(0, Math.ceil(totalSec));
+  const h = Math.floor(t / 3600);
+  const m = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
+  const sec = String(t % 60).padStart(2, "0");
+  return h > 0 ? `${String(h).padStart(2, "0")}:${m}:${sec}` : `${m}:${sec}`;
+}
 
 export default function Instructions() {
   const navigate = useNavigate();
@@ -25,18 +37,69 @@ export default function Instructions() {
   const { fullscreen, enter } = useExamGuard(ready, handleLockdownViolation);
   useProctor(ready);
 
-  const [totalSeconds, setTotalSeconds] = useState(10);
+  // ---- Timing ----
+  // The exam opens at its scheduled start time, not 10 seconds after the
+  // instructions appear. The candidate always gets at least READ_SECONDS to
+  // read the rules; after that the page waits (with a live countdown) until
+  // the scheduled start, then opens the test. The countdown uses the SERVER
+  // clock (offset measured when the exam info is fetched), so a wrong clock
+  // on the candidate's computer cannot start the exam early or late.
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [startMs, setStartMs] = useState(null);
+  const [infoLoaded, setInfoLoaded] = useState(false);
+  const offsetRef = useRef(0); // serverTime - clientTime
+  const readStartRef = useRef(null);
 
-  // Countdown -> auto redirect to /dashboard
   useEffect(() => {
     if (!ready) return undefined;
-    if (totalSeconds <= 0) {
-      navigate("/dashboard", { replace: true });
+    readStartRef.current = Date.now();
+    const examId = localStorage.getItem("examId");
+    if (!examId) {
+      setInfoLoaded(true);
       return undefined;
     }
-    const id = setTimeout(() => setTotalSeconds((s) => s - 1), 1000);
-    return () => clearTimeout(id);
-  }, [ready, totalSeconds, navigate]);
+    const before = Date.now();
+    ExamAPI.getPublicExamInfo(examId)
+      .then((e) => {
+        const after = Date.now();
+        if (e && e.serverTime) {
+          // Assume the response was produced halfway through the round trip.
+          offsetRef.current = new Date(e.serverTime).getTime() - (before + after) / 2;
+        }
+        if (e && e.startTime) setStartMs(new Date(e.startTime).getTime());
+      })
+      .catch(() => { /* no schedule info -> plain reading countdown */ })
+      .finally(() => setInfoLoaded(true));
+    return undefined;
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready) return undefined;
+    const id = setInterval(() => setNowMs(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [ready]);
+
+  const serverNow = nowMs + offsetRef.current;
+  const readLeft = readStartRef.current ? Math.max(0, READ_SECONDS - (nowMs - readStartRef.current) / 1000) : READ_SECONDS;
+  const startLeft = startMs ? Math.max(0, (startMs - serverNow) / 1000) : 0;
+  const waitingForStart = startLeft > 0;
+  const readDone = readLeft <= 0;
+  const canStart = ready && infoLoaded && readDone && !waitingForStart;
+
+  useEffect(() => {
+    if (canStart) navigate("/dashboard", { replace: true });
+  }, [canStart, navigate]);
+
+  // Disable the browser Back button on this page too.
+  useEffect(() => {
+    if (!ready) return undefined;
+    window.history.pushState(null, "", window.location.href);
+    function onPopState() {
+      window.history.pushState(null, "", window.location.href);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [ready]);
 
   // Anti-tab-switching monitor — shares the violation counter with leaving
   // fullscreen (handleLockdownViolation above).
@@ -64,9 +127,9 @@ export default function Instructions() {
     );
   }
 
-  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  const done = totalSeconds <= 0;
+  const timerLabel = waitingForStart ? "Exam Starts In" : "Auto Redirect In";
+  const timerText = waitingForStart ? fmtCountdown(startLeft) : fmtCountdown(readLeft);
+  const done = canStart;
 
   return (
     <div style={{ background: "#f1f5f9", fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif", minHeight: "100vh", display: "flex", flexDirection: "column", userSelect: "none" }}>
@@ -92,12 +155,12 @@ export default function Instructions() {
                   <p className="text-muted small mb-0">Please read all instructions carefully before the exam starts.</p>
                 </div>
                 <div className="p-2 px-3 text-center" style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", fontSize: "1.1rem", borderRadius: 8 }}>
-                  <div className="small fw-bold text-uppercase">Auto Redirect In</div>
+                  <div className="small fw-bold text-uppercase">{timerLabel}</div>
                   <div style={{ fontWeight: 700, color: done ? "#16a34a" : "#dc2626", fontSize: "1.3rem" }}>
                     {done ? (
                       <><i className="fa-solid fa-circle-check text-success me-1"></i>00:00</>
                     ) : (
-                      <><i className="fa-regular fa-clock me-1"></i>{minutes}:{seconds}</>
+                      <><i className="fa-regular fa-clock me-1"></i>{timerText}</>
                     )}
                   </div>
                 </div>
@@ -111,8 +174,8 @@ export default function Instructions() {
                 </h5>
 
                 <ol className="text-secondary ps-3" style={{ lineHeight: 1.6 }}>
-                  <li className="mb-3"><strong>Reading Time Mandatory:</strong> You have <strong>10 seconds</strong> to read these rules. Once the timer reaches zero, you will be redirected automatically to the test dashboard.</li>
-                  <li className="mb-3"><strong>Exam Duration & Format:</strong> The total test duration will begin immediately upon redirection. All questions are multiple-choice.</li>
+                  <li className="mb-3"><strong>Reading Time:</strong> Please read these rules carefully while you wait. The test will open <strong>automatically at the scheduled exam start time</strong> — do not refresh or close this page.</li>
+                  <li className="mb-3"><strong>Exam Duration & Format:</strong> The total test duration begins as soon as the test opens at the scheduled start time. All questions are multiple-choice.</li>
                   <li className="mb-3"><strong>Proctored Environment:</strong> Do not refresh the page, switch browser tabs, minimize the window, or close the browser during the exam. Any attempt to navigate away will result in immediate disqualification.</li>
                   <li className="mb-3"><strong>Device Requirements & Peripheral Restrictions:</strong> Ensure you have a stable internet connection. Use of external calculators, unauthorized secondary mobile devices, secondary monitors, or copy-pasting code/text is strictly prohibited.</li>
                   <li className="mb-3"><strong>Inspection & Developer Tools:</strong> Attempting to open Developer Console (<kbd>F12</kbd>, <kbd>Ctrl+Shift+I</kbd>), inspect elements, or alter DOM elements will trigger an automatic security lock and disqualify your attempt.</li>
@@ -128,10 +191,10 @@ export default function Instructions() {
 
               <div className="card-footer bg-light p-3 px-4 d-flex justify-content-between align-items-center">
                 <span className="text-muted small">
-                  <i className="fa-solid fa-lock me-1"></i>Exam will begin automatically when timer reaches 00:00.
+                  <i className="fa-solid fa-lock me-1"></i>Exam will begin automatically at the scheduled start time.
                 </span>
                 <span className="badge bg-primary px-3 py-2">
-                  <i className="fa-solid fa-spinner fa-spin me-1"></i>Preparing Exam...
+                  <i className="fa-solid fa-spinner fa-spin me-1"></i>{waitingForStart ? "Waiting for exam start..." : "Preparing Exam..."}
                 </span>
               </div>
             </div>

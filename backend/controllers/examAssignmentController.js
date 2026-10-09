@@ -88,6 +88,9 @@ exports.getPublicExamInfo = async (req, res) => {
     loginWindowMinutes: exam.loginWindowMinutes,
     examMode: exam.examMode || 'campus',
     instructions: exam.instructions,
+    // Server clock, so the instructions screen can count down to the exact
+    // start time even if the candidate's own computer clock is off.
+    serverTime: new Date().toISOString(),
     registrationOpen: isRegistrationOpen(exam),
     registrationOpensAt: registrationOpensAt(exam),
     registrationNotStarted: !!(registrationOpensAt(exam) && new Date() < registrationOpensAt(exam)),

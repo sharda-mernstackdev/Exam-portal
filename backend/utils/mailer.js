@@ -5,13 +5,20 @@ let transporter = null;
 
 // Builds the public site address used in every mail link. The value comes from
 // FRONTEND_URL, which hosting panels often save with a stray space / newline /
-// quotes (that is what put a space after ".com" in the link). We remove ALL
-// whitespace and quotes, add https:// if it was left out, and drop trailing "/".
+// quotes / invisible characters (that is what put a gap after ".com" in the
+// link). Every character that can never be part of a web address is removed
+// (spaces, tabs, new lines, non-breaking and zero-width spaces, quotes, commas
+// ...), https:// is added if it was left out, and the path / trailing "/" is
+// dropped so only the site address itself is kept.
 function getBaseUrl() {
   let url = String(process.env.FRONTEND_URL || 'http://localhost:5173')
-    .replace(/[\s"'`]+/g, '');
-  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-  return url.replace(/\/+$/, '');
+    .replace(/[^A-Za-z0-9:\/._~%@!$&*+=-]/g, '');
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url.replace(/^\/+/, '');
+  try {
+    return new URL(url).origin; // e.g. https://www.prolificwebcoder.com
+  } catch (e) {
+    return url.replace(/\/+$/, '');
+  }
 }
 
 function getTransporter() {

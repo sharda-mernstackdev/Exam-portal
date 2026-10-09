@@ -7,6 +7,7 @@ const { sendExamInvitationEmail } = require('../utils/mailer');
 const { startSingleSession, isLoggedInElsewhere } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { lateLoginDeadline } = require('../utils/examWindow');
+const { verifyGoogleIdToken } = require('../utils/googleAuth');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -127,8 +128,23 @@ exports.registerForExam = async (req, res) => {
     }
 
     const fullName = (req.body.fullName || '').trim();
-    const email = (req.body.email || '').trim().toLowerCase();
+    let email = (req.body.email || '').trim().toLowerCase();
     const phone = (req.body.phone || '').trim();
+
+    // ---- Email ownership check (Google Sign-In) ----
+    // When GOOGLE_CLIENT_ID is set, the candidate must be signed in to the
+    // Google account they register with, on the device they are using. The
+    // email comes from Google's verified token — whatever the form says is
+    // ignored — so nobody can register with someone else's email address.
+    const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+    if (googleClientId) {
+      try {
+        const g = await verifyGoogleIdToken(req.body.googleToken, googleClientId);
+        email = g.email;
+      } catch (gErr) {
+        return res.status(401).json({ message: gErr.message });
+      }
+    }
 
     if (!fullName || !NAME_RE.test(fullName)) {
       return res.status(400).json({ message: 'Please enter your full name (letters and spaces only).' });

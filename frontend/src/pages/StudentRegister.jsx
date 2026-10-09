@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
@@ -6,6 +6,44 @@ import ExamAPI from "../api";
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^[0-9]{10}$/;
+
+// Google Sign-In (email ownership check). Set VITE_GOOGLE_CLIENT_ID in the
+// frontend .env (and GOOGLE_CLIENT_ID in the backend .env). When it is set,
+// a candidate can register only after signing in with the Google account
+// whose email they are registering with.
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
+
+function decodeJwtPayload(token) {
+  try {
+    const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = decodeURIComponent(
+      atob(b64).split("").map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join("")
+    );
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadGoogleScript() {
+  return new Promise((resolve, reject) => {
+    if (window.google && window.google.accounts && window.google.accounts.id) return resolve();
+    const existing = document.getElementById("google-gsi-script");
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", reject);
+      return;
+    }
+    const sc = document.createElement("script");
+    sc.id = "google-gsi-script";
+    sc.src = "https://accounts.google.com/gsi/client";
+    sc.async = true;
+    sc.defer = true;
+    sc.onload = () => resolve();
+    sc.onerror = reject;
+    document.head.appendChild(sc);
+  });
+}
 
 function formatDate(d) {
   if (!d) return "-";
@@ -37,6 +75,9 @@ export default function StudentRegister({ examId: examIdProp }) {
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [googleToken, setGoogleToken] = useState("");
+  const [googleError, setGoogleError] = useState("");
+  const googleBtnRef = useRef(null);
 
   useEffect(() => {
     ExamAPI.getPublicExamInfo(examId)
@@ -48,13 +89,46 @@ export default function StudentRegister({ examId: examIdProp }) {
       );
   }, [examId]);
 
+  // Render the "Sign in with Google" button once the form is on screen.
+  const formVisible = !!exam && exam.registrationOpen !== false && !done;
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || !formVisible || googleToken) return undefined;
+    let cancelled = false;
+    loadGoogleScript()
+      .then(() => {
+        if (cancelled || !googleBtnRef.current) return;
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (resp) => {
+            const payload = decodeJwtPayload(resp.credential);
+            if (!payload || !payload.email) {
+              setGoogleError("Google sign-in failed. Please try again.");
+              return;
+            }
+            setGoogleError("");
+            setGoogleToken(resp.credential);
+            setEmail(String(payload.email).toLowerCase());
+            setFullName((prev) => prev || String(payload.name || "").replace(/[^a-zA-Z\s]/g, "").trim());
+            setErrors((prev) => ({ ...prev, email: undefined }));
+          }
+        });
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+          theme: "outline", size: "large", text: "signin_with", shape: "rectangular", width: 300
+        });
+      })
+      .catch(() => setGoogleError("Could not load Google sign-in. Check your internet connection and refresh the page."));
+    return () => { cancelled = true; };
+  }, [formVisible, googleToken]);
+
   function handleSubmit(e) {
     e.preventDefault();
     const nextErrors = {};
     if (!fullName.trim() || !NAME_RE.test(fullName.trim()))
       nextErrors.fullName =
         "Please enter your full name (letters and spaces only).";
-    if (!EMAIL_RE.test(email.trim()))
+    if (GOOGLE_CLIENT_ID && !googleToken)
+      nextErrors.email = "Please sign in with your Google account first. Your registration email must be the Google account signed in on this device.";
+    else if (!EMAIL_RE.test(email.trim()))
       nextErrors.email = "Please enter a valid email address.";
     if (!MOBILE_RE.test(phone.trim()))
       nextErrors.phone = "Please enter a valid 10-digit mobile number.";
@@ -66,11 +140,17 @@ export default function StudentRegister({ examId: examIdProp }) {
       fullName: fullName.trim(),
       email: email.trim(),
       phone: phone.trim(),
+      googleToken: googleToken || undefined,
     })
       .then(() => setDone(true))
       .catch((err) => {
         setSubmitting(false);
-        if (err.status === 409) {
+        if (err.status === 401 && GOOGLE_CLIENT_ID) {
+          // Google sign-in expired / invalid: ask for a fresh one.
+          setGoogleToken("");
+          setEmail("");
+          setErrors({ email: err.message });
+        } else if (err.status === 409) {
           setErrors({ email: err.message });
         } else {
           alert(
@@ -281,13 +361,28 @@ export default function StudentRegister({ examId: examIdProp }) {
                   <label className="form-label fw-bold small text-secondary">
                     Email Address
                   </label>
+                  {GOOGLE_CLIENT_ID && !googleToken && (
+                    <div className="mb-2">
+                      <div ref={googleBtnRef}></div>
+                      <div className="small text-muted mt-1">
+                        Sign in with the Google account you want to register with. Your exam link will be sent to that email.
+                      </div>
+                      {googleError && <div className="text-danger small mt-1">{googleError}</div>}
+                    </div>
+                  )}
                   <input
                     type="email"
                     className={`form-control ${errors.email ? "is-invalid" : ""}`}
-                    placeholder="candidate@example.com"
+                    placeholder={GOOGLE_CLIENT_ID ? "Sign in with Google to fill your email" : "candidate@example.com"}
                     value={email}
+                    readOnly={!!GOOGLE_CLIENT_ID}
                     onChange={(e) => setEmail(e.target.value)}
                   />
+                  {GOOGLE_CLIENT_ID && googleToken && (
+                    <div className="small text-success mt-1">
+                      <i className="fa-solid fa-circle-check me-1"></i>Email verified with Google
+                    </div>
+                  )}
                   {errors.email && (
                     <div className="text-danger small mt-1">{errors.email}</div>
                   )}

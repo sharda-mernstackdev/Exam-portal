@@ -32,7 +32,9 @@ export default function Dashboard() {
   }
 
   const { fullscreen, enter } = useExamGuard(ready, handleLockdownViolation);
-  useProctor(ready);
+  // Camera warnings (not visible / looking away / extra person): 3 warnings,
+  // then the exam is submitted automatically.
+  useProctor(ready, { warnings: true, onLimit: () => submitRef.current() });
 
   const [questions, setQuestions] = useState(null); // null = loading
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -156,6 +158,12 @@ export default function Dashboard() {
 
   function handleNext() {
     if (currentIndex < questions.length - 1) loadQuestion(currentIndex + 1);
+  }
+
+  // Go back to the previous question (e.g. to answer one that was skipped).
+  // A response that was already Saved stays locked, as before.
+  function handlePrevious() {
+    if (currentIndex > 0) loadQuestion(currentIndex - 1);
   }
 
   function handleMarkReview() {
@@ -371,6 +379,9 @@ export default function Dashboard() {
                   </button>
                 </div>
                 <div>
+                  <button className="btn btn-outline-primary px-4 fw-bold me-2" disabled={currentIndex === 0} onClick={handlePrevious}>
+                    <i className="fa-solid fa-chevron-left me-1"></i> Previous
+                  </button>
                   <button className="btn btn-success px-4 fw-bold me-2" onClick={handleSave}>
                     <i className="fa-solid fa-floppy-disk me-1"></i> Save
                   </button>
@@ -423,9 +434,9 @@ export default function Dashboard() {
 
               <hr className="my-4" />
 
-              {/* Campus drive: locked until the timer reaches 00:00 — the exam then
-                  auto-submits (the countdown effect above). Online exam: the
-                  candidate may finish and submit early. */}
+              {/* Locked until the timer reaches 00:00 — the exam then auto-submits
+                  (the countdown effect above). Until then the button is disabled
+                  so a candidate can't finish early. */}
               <button className="btn btn-danger w-100 py-2 fw-bold" disabled={submitting || (!earlySubmitAllowed && timeLeft > 0)} onClick={submitExam}>
                 {submitting ? (
                   <><i className="fa-solid fa-spinner fa-spin me-2"></i>Submitting...</>

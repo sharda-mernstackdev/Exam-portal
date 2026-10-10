@@ -26,7 +26,13 @@ async function sendDueRound2Emails() {
     if (!round2Code) return; // nothing to send until admin sets the code
 
     const secondExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
-    const window = secondExam ? { startTime: secondExam.startTime, endTime: secondExam.endTime } : null;
+    const window = secondExam ? {
+      // The mail shows when login actually opens (start time minus the login window).
+      startTime: secondExam.startTime
+        ? new Date(new Date(secondExam.startTime).getTime() - (Number(secondExam.loginWindowMinutes) || 0) * 60000)
+        : secondExam.startTime,
+      endTime: secondExam.endTime
+    } : null;
 
     // Claim students one at a time so a restart / second instance can't
     // send the same invitation twice.

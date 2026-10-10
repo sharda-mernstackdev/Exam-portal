@@ -47,12 +47,15 @@ export default function Dashboard() {
   // "campus" exam, where Complete stays locked until the end time.
   const [earlySubmitAllowed, setEarlySubmitAllowed] = useState(false);
 
-  // Camera warnings (not visible / looking away / extra person): 3 warnings,
-  // then auto-submit — ONLINE exams only. A campus exam always runs until its
-  // end time, so it never shows camera warnings or submits because of them.
+  // Proctoring:
+  //  - Camera face warnings (not visible / looking away / extra person): 3
+  //    warnings, then auto-submit — ONLINE exams only. A campus exam always
+  //    runs until its end time and is never submitted because of the camera.
+  //  - Background voice / noise and movement in the camera: only a red note
+  //    under the camera box (all exams) — they never end the exam.
   useProctor(ready, {
     warnings: earlySubmitAllowed,
-    quiet: !earlySubmitAllowed,
+    voice: true,
     onLimit: () => submitRef.current()
   });
 

@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ExamAPI from "../../api";
+import { formatDate } from "./analytics";
 import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV } from "./codingQuestionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
@@ -7,40 +8,6 @@ const EMPTY_CQ_FORM = {
   title: "", difficulty: "Medium", description: "", correctOutput: "",
   ex1In: "", ex1Out: "", ex2In: "", ex2Out: "", ex3In: "", ex3Out: ""
 };
-
-// Shows dates as DD-MM-YYYY hh:mm AM/PM in IST, same on every computer.
-// Example: 01-10-2026 03:38 PM
-function formatDate(value) {
-  if (!value) return "-";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return "-";
-  return `${formatDateOnly(d)} ${formatTimeOnly(d)}`;
-}
-
-// "01-10-2026" (IST)
-function formatDateOnly(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  if (isNaN(d.getTime())) return "-";
-  return d
-    .toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Asia/Kolkata" })
-    .replace(/\//g, "-");
-}
-
-// "03:38 PM" (IST)
-function formatTimeOnly(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  if (isNaN(d.getTime())) return "-";
-  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
-}
-
-// Card schedule text. Same day  -> "01-10-2026 03:38 PM – 04:08 PM"
-// Different days -> "01-10-2026 03:38 PM – 02-10-2026 04:08 PM"
-function formatSchedule(start, end) {
-  const sameDay = formatDateOnly(start) === formatDateOnly(end);
-  return sameDay
-    ? `${formatDateOnly(start)} ${formatTimeOnly(start)} – ${formatTimeOnly(end)}`
-    : `${formatDate(start)} – ${formatDate(end)}`;
-}
 
 // Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
 // minutes, returns the computed end datetime-local string. Returns "" if
@@ -79,6 +46,13 @@ const ROUND2_CARD_THEMES = [
 // idea as Round 1's category list, but difficulty only ever has these 3.
 const DIFFICULTY_LEVELS = ["Easy", "Medium", "Hard"];
 
+// The difficulty sets a Round 2 config serves. Newer configs store a list
+// (`difficulties`); older ones only have the single `difficulty` field.
+function examLevels(ex) {
+  if (Array.isArray(ex.difficulties) && ex.difficulties.length) return ex.difficulties;
+  return ex.difficulty ? [ex.difficulty] : [];
+}
+
 function parseArg(val) {
   try { return JSON.parse("[" + val + "]"); } catch (e) { return [val]; }
 }
@@ -92,12 +66,22 @@ function toFuncName(title) {
   return camel || "solution" + Date.now();
 }
 
-const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulty: "Medium", startTime: "", endTime: "" };
+const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulties: ["Medium"], startTime: "", endTime: "", loginWindowMinutes: "0" };
 
 export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsChanged, onCodingQuestionsChanged }) {
   // ---- Second-level exam config form ----
   const [examForm, setExamForm] = useState(EMPTY_EXAM_FORM);
   const [editingExamId, setEditingExamId] = useState(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffBoxRef = useRef(null);
+  useEffect(() => {
+    if (!diffOpen) return undefined;
+    const onDown = (e) => {
+      if (diffBoxRef.current && !diffBoxRef.current.contains(e.target)) setDiffOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [diffOpen]);
 
   function startEditExam(ex) {
     setEditingExamId(ex._id);
@@ -105,9 +89,10 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       examName: ex.title,
       duration: String(ex.durationMinutes || ""),
       testCases: "",
-      difficulty: ex.difficulty || "Medium",
+      difficulties: examLevels(ex).length ? examLevels(ex) : ["Medium"],
       startTime: toDatetimeLocal(ex.startTime),
-      endTime: toDatetimeLocal(ex.endTime)
+      endTime: toDatetimeLocal(ex.endTime),
+      loginWindowMinutes: String(ex.loginWindowMinutes || 0)
     });
     document.getElementById("round2ExamFormAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -117,22 +102,24 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     setExamForm(EMPTY_EXAM_FORM);
   }
 
-  // Used by both the form's submit button and the "Save Changes" button on
-  // the card being edited (that one is outside the <form>, so it calls this
-  // directly and the required fields are checked here).
-  function saveExam(e) {
-    e?.preventDefault?.();
-    if (!examForm.examName.trim()) { alert("Enter an exam name."); return; }
-    if (!Number(examForm.duration) || Number(examForm.duration) < 1) { alert("Enter the duration in minutes."); return; }
+  function handleExamSubmit(e) {
+    e.preventDefault();
+    if (examForm.difficulties.length === 0) {
+      alert("Please tick at least one difficulty (Easy / Medium / Hard).");
+      return;
+    }
+    // Keep the levels in Easy -> Hard order; `difficulty` = the first one, for older code.
+    const levels = DIFFICULTY_LEVELS.filter((d) => examForm.difficulties.includes(d));
     const payload = {
       title: examForm.examName.trim(),
       durationMinutes: Number(examForm.duration),
-      difficulty: examForm.difficulty,
+      difficulties: levels,
+      difficulty: levels[0],
+      loginWindowMinutes: Math.max(0, Number(examForm.loginWindowMinutes) || 0),
       startTime: toISTISOString(examForm.startTime) || undefined,
       endTime: toISTISOString(examForm.endTime) || undefined
     };
-    const wasEditing = !!editingExamId;
-    const req = wasEditing
+    const req = editingExamId
       ? ExamAPI.adminUpdateSecondLevelExam(editingExamId, payload)
       : ExamAPI.adminCreateSecondLevelExam(payload);
     req
@@ -322,9 +309,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       <div className="card-box" id="round2ExamFormAnchor">
         <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>
         <div className="sub">Set up a coding / test-cases round for shortlisted candidates</div>
-
-
-        <form className="row g-3" onSubmit={saveExam}>
+        <form className="row g-3" onSubmit={handleExamSubmit}>
           <div className="col-md-4">
             <label className="form-label small fw-bold text-secondary">Exam Name</label>
             <input type="text" className="form-control" placeholder="e.g. Test Cases Round 1" required
@@ -345,22 +330,50 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           </div>
           <div className="col-md-2">
             <label className="form-label small fw-bold text-secondary">Test Cases</label>
-            {/* Not required: this value isn't sent to the backend, and when
-                editing an existing config it starts empty, which used to
-                block the form from submitting. */}
-            <input type="number" className="form-control" min="1" placeholder="10"
+            <input type="number" className="form-control" min="1" placeholder="10" required
               value={examForm.testCases} onChange={(e) => setExamForm({ ...examForm, testCases: e.target.value })} />
           </div>
           <div className="col-md-2">
             <label className="form-label small fw-bold text-secondary">Difficulty</label>
-            <select className="form-select" value={examForm.difficulty} onChange={(e) => setExamForm({ ...examForm, difficulty: e.target.value })}>
-              <option value="Easy">Easy</option><option value="Medium">Medium</option><option value="Hard">Hard</option>
-            </select>
-            <div className="form-text">Candidates get this difficulty's question set below.</div>
+            <div className="position-relative" ref={diffBoxRef}>
+            <button type="button" className="form-select text-start bg-white"
+              onClick={() => setDiffOpen((o) => !o)} aria-expanded={diffOpen}>
+              {DIFFICULTY_LEVELS.filter((d) => examForm.difficulties.includes(d)).join(", ") || "Select difficulty"}
+            </button>
+            {diffOpen && (
+            <div className="border rounded px-3 py-2 bg-white shadow position-absolute w-100"
+              style={{ zIndex: 20, top: "100%", left: 0 }}>
+              {DIFFICULTY_LEVELS.map((d) => (
+                <div className="form-check" key={d}>
+                  <input
+                    type="checkbox"
+                    className="form-check-input"
+                    id={`round2Diff-${d}`}
+                    checked={examForm.difficulties.includes(d)}
+                    onChange={(e) =>
+                      setExamForm((prev) => ({
+                        ...prev,
+                        difficulties: e.target.checked
+                          ? [...prev.difficulties, d]
+                          : prev.difficulties.filter((x) => x !== d)
+                      }))
+                    } />
+                  <label className="form-check-label" htmlFor={`round2Diff-${d}`}>{d}</label>
+                </div>
+              ))}
+            </div>
+            )}
+            </div>
+            <div className="form-text">Tick one or more. Candidates get questions from all ticked sets.</div>
           </div>
-          {/* <div className="col-md-2 d-flex align-items-start" style={{ paddingTop: 30 }}>
+          <div className="col-md-2 d-flex align-items-end gap-2">
             <button type="submit" className="btn btn-dark w-100 fw-bold">{editingExamId ? "Save Changes" : "+ Add Config"}</button>
-          </div> */}
+          </div>
+          {editingExamId && (
+            <div className="col-12">
+              <button type="button" className="btn btn-outline-secondary btn-sm fw-bold" onClick={cancelEditExam}>Cancel Edit</button>
+            </div>
+          )}
 
           <div className="col-12"><hr className="my-1" /></div>
           <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
@@ -375,28 +388,20 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                   endTime: prev.duration ? computeEndTime(startTime, prev.duration) : prev.endTime
                 }));
               }} />
-            {examForm.startTime && !Number(examForm.duration) && (
-              <div className="form-text text-warning">Enter the duration above to auto-calculate the closing time.</div>
-            )}
           </div>
           <div className="col-md-4">
             <label className="form-label small fw-bold text-secondary">
               Access Closes <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
             </label>
             <DateTimePicker
-              value={examForm.endTime}
-              min={examForm.startTime ? examForm.startTime.slice(0, 10) : undefined}
-              onChange={(endTime) => setExamForm({ ...examForm, endTime })} />
+              value={examForm.endTime} onChange={(endTime) => setExamForm({ ...examForm, endTime })} />
           </div>
-          <div className="col-md-4 d-flex align-items-end">
-            <div className="form-text mb-2">Candidates who pass Round 1 can only log in to Round 2 between these times. Leave blank for always-open access.</div>
-          </div>
-
-          <div className="col-12 d-flex gap-2 mt-2">
-            <button type="submit" className="btn btn-dark fw-bold px-4">{editingExamId ? "Save Changes" : "+ Add Config"}</button>
-            {editingExamId && (
-              <button type="button" className="btn btn-outline-secondary" onClick={cancelEditExam}>Close</button>
-            )}
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
+            <input type="number" className="form-control" min="0" placeholder="0"
+              value={examForm.loginWindowMinutes}
+              onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
+            <div className="form-text">Candidates can log in this many minutes before "Access Opens" (0 = exactly at Access Opens). Leave the dates blank for always-open access.</div>
           </div>
         </form>
       </div>
@@ -410,14 +415,11 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <div className="row g-3 mt-1">
             {secondExams.slice().reverse().map((ex, idx) => {
               const theme = ROUND2_CARD_THEMES[idx % ROUND2_CARD_THEMES.length];
-              const qCount = (questionsByDifficulty.get(ex.difficulty) || []).length;
-              const isEditing = editingExamId === ex._id;
+              const levels = examLevels(ex);
+              const qCount = levels.reduce((sum, d) => sum + (questionsByDifficulty.get(d) || []).length, 0);
               return (
                 <div className="col-md-6 col-lg-4" key={ex._id}>
-                  <div
-                    className="test-card"
-                    style={{ borderTop: `5px solid ${theme.accent}`, background: theme.bg }}
-                  >
+                  <div className="test-card" style={{ borderTop: `5px solid ${theme.accent}`, background: theme.bg }}>
                     <div className="d-flex justify-content-between align-items-start mb-2">
                       <span className="badge-pill" style={{ background: theme.accent, color: "#fff", letterSpacing: "0.04em" }}>
                         <i className="fa-solid fa-code me-1"></i>ROUND 2
@@ -436,9 +438,9 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                         <div className="test-card-stat-value" style={{ color: theme.dark }}>{qCount}</div>
                         <div className="test-card-stat-label">questions</div>
                       </div>
-                      {ex.difficulty && (
+                      {levels.length > 0 && (
                         <span className="test-card-chip align-self-center" style={{ background: theme.chipBg, color: theme.dark }}>
-                          <i className="fa-solid fa-layer-group me-1"></i>{ex.difficulty} set
+                          <i className="fa-solid fa-layer-group me-1"></i>{levels.join(" + ")} {levels.length > 1 ? "sets" : "set"}
                         </span>
                       )}
                     </div>
@@ -447,7 +449,9 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                       {ex.startTime && ex.endTime ? (
                         <>
                           <i className="fa-solid fa-calendar-days me-2" style={{ color: theme.accent }}></i>
-                          {formatSchedule(ex.startTime, ex.endTime)}
+                          {formatDate(ex.startTime)}, {new Date(ex.startTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                          {" "}–{" "}
+                          {new Date(ex.endTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                         </>
                       ) : (
                         <span className="text-muted"><i className="fa-solid fa-calendar-xmark me-2"></i>Always open (no access window set)</span>
@@ -459,14 +463,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                     </div>
 
                     <div className="d-flex flex-wrap gap-2 mt-3">
-                      {isEditing ? (
-                        <>
-                          <button type="button" className="btn btn-dark btn-sm fw-bold" onClick={saveExam}>Save Changes</button>
-                          <button type="button" className="btn btn-outline-secondary btn-sm fw-bold" onClick={cancelEditExam}>Close</button>
-                        </>
-                      ) : (
-                        <button type="button" className="btn-edit" onClick={() => startEditExam(ex)}>Edit</button>
-                      )}
+                      <button type="button" className="btn-edit" onClick={() => startEditExam(ex)}>Edit</button>
                       <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => toggleCandidates(ex._id)}>
                         {openCandidatesFor === ex._id ? "Hide registrations" : "View registrations"}
                       </button>

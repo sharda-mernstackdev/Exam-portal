@@ -43,6 +43,16 @@ const YAW_MAX = 0.7;             // outside this range = looking sideways
 const CENTER_MIN = 0.12;         // face centre across the frame (0..1) —
 const CENTER_MAX = 0.88;         // outside this range = moved to the side
 
+// Soft alerts (never end the exam — they only show a red note under the camera
+// box and are logged): movement in the camera and background voice / noise.
+const MOTION_LIMIT = 22;         // mean pixel change between two checks
+const MOTION_TICKS = 2;          // ...for this many checks in a row
+const VOICE_MIN_RMS = 0.05;      // microphone level that can count as voice
+const VOICE_FACTOR = 3;          // ...and it must be this many times the room's normal noise
+const VOICE_HOLD_MS = 1500;      // ...for at least this long
+const VOICE_CHECK_MS = 300;
+const VOICE_CALIBRATION_SAMPLES = 10; // first ~3 s only measure the room's normal noise
+
 function logEvent(type, detail, flash) {
   try {
     const arr = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
@@ -72,8 +82,11 @@ function logEvent(type, detail, flash) {
  * watches for a covered/dark camera, no face, multiple faces, tab
  * switching, and window blur — logging each to localStorage + the backend.
  *
- * options.quiet (default false): when true (campus exams) no on-screen flash
- *   messages are shown at all; events are only logged.
+ * options.voice (default false): also listen to the microphone and show a red
+ *   note under the camera box when background voice / noise is heard. It never
+ *   ends the exam. If the microphone is not allowed the exam carries on.
+ * options.quiet (default false): when true no on-screen flash messages are
+ *   shown at all; events are only logged.
  * options.warnings (default false): when true (online exams only), face problems
  *   — candidate not visible / moved to the side / looking away, or another
  *   person in the camera — raise a visible WARNING (1 of 3, 2 of 3, 3 of 3).
@@ -105,6 +118,11 @@ export function useProctor(active, options) {
   const badRef = useRef({ reason: null, since: 0 });
   const limitReachedRef = useRef(false);
   const landmarkerLoadingRef = useRef(false);
+  const prevMotionRef = useRef(null);
+  const motionCountRef = useRef(0);
+  const audioStreamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const voiceTimerRef = useRef(null);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -328,6 +346,28 @@ export function useProctor(active, options) {
         return;
       }
 
+      // Movement in front of the camera (soft red note only, never ends the exam).
+      const prev = prevMotionRef.current;
+      if (prev && prev.length === px.length) {
+        let diff = 0;
+        let n = 0;
+        for (let j = 0; j < px.length; j += 40) {
+          diff += Math.abs(px[j] - prev[j]);
+          n++;
+        }
+        if (diff / n > MOTION_LIMIT) {
+          motionCountRef.current += 1;
+          if (motionCountRef.current >= MOTION_TICKS) {
+            motionCountRef.current = 0;
+            setStatus(false, "Movement detected");
+            logEvent("camera_movement", "Movement detected in front of the camera", flash);
+          }
+        } else {
+          motionCountRef.current = 0;
+        }
+      }
+      prevMotionRef.current = new Uint8ClampedArray(px);
+
       // Face warnings are switched on later (once the exam mode is known), so
       // the landmark model is loaded the first time warnings are wanted.
       if (optionsRef.current.warnings && !landmarkerRef.current && !landmarkerLoadingRef.current) {
@@ -409,6 +449,62 @@ export function useProctor(active, options) {
       timerRef.current = setInterval(tick, CHECK_EVERY_MS);
     }
 
+    // Background voice / noise (soft red note only, never ends the exam).
+    function startVoice() {
+      if (audioStreamRef.current || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+      navigator.mediaDevices
+        .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false }, video: false })
+        .then((stream) => {
+          if (stoppedRef.current) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          audioStreamRef.current = stream;
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return;
+          const ctx = new Ctx();
+          audioCtxRef.current = ctx;
+          if (ctx.resume) ctx.resume().catch(() => {});
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 1024;
+          ctx.createMediaStreamSource(stream).connect(analyser);
+          const buf = new Float32Array(analyser.fftSize);
+
+          let ambient = 0.01;     // the room's normal noise level
+          let samples = 0;
+          let loudSince = 0;
+          voiceTimerRef.current = setInterval(() => {
+            if (stoppedRef.current) return;
+            analyser.getFloatTimeDomainData(buf);
+            let sum = 0;
+            for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+            const rms = Math.sqrt(sum / buf.length);
+
+            if (samples < VOICE_CALIBRATION_SAMPLES) {
+              ambient = (ambient * samples + rms) / (samples + 1);
+              samples += 1;
+              return;
+            }
+            const limit = Math.max(VOICE_MIN_RMS, ambient * VOICE_FACTOR);
+            if (rms > limit) {
+              const now = Date.now();
+              if (!loudSince) loudSince = now;
+              if (now - loudSince >= VOICE_HOLD_MS) {
+                loudSince = now;
+                setStatus(false, "Voice / noise heard");
+                logEvent("background_voice", "Background voice or noise detected", flash);
+              }
+            } else {
+              loudSince = 0;
+              ambient = ambient * 0.95 + rms * 0.05; // follow slow changes in room noise
+            }
+          }, VOICE_CHECK_MS);
+        })
+        .catch(() => {
+          logEvent("mic_denied", "Microphone not available - background voice check is off", flash);
+        });
+    }
+
     function retry() {
       if (stoppedRef.current) return;
       streamRef.current = null;
@@ -440,6 +536,7 @@ export function useProctor(active, options) {
             });
           });
           beginAnalysis();
+          if (optionsRef.current.voice) startVoice();
         })
         .catch((err) => {
           setStatus(false, "Camera blocked");
@@ -458,6 +555,7 @@ export function useProctor(active, options) {
     }
     function onPageHide() {
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      if (audioStreamRef.current) audioStreamRef.current.getTracks().forEach((t) => t.stop());
     }
 
     document.addEventListener("visibilitychange", onVisibility);
@@ -477,6 +575,15 @@ export function useProctor(active, options) {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+      }
+      clearInterval(voiceTimerRef.current);
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((t) => t.stop());
+        audioStreamRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
       }
       if (overlayRef.current && overlayRef.current.parentNode) {
         overlayRef.current.parentNode.removeChild(overlayRef.current);

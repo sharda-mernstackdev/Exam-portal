@@ -8,6 +8,25 @@ import ExamAPI from "../api";
 
 const EXAM_DURATION_MIN = 45;
 
+// Laptop / desktop only. Phones and tablets are blocked (iPads that report
+// themselves as a Mac are caught by the touch-points check).
+function isMobileDevice() {
+  const ua = navigator.userAgent || "";
+  if (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk|Kindle|PlayBook|BlackBerry|IEMobile|Opera Mini|webOS/i.test(ua)) return true;
+  if (navigator.userAgentData && navigator.userAgentData.mobile) return true;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
+
+const CAM_MESSAGES = {
+  checking: ["Checking your camera...", "Please click Allow when the browser asks for camera permission."],
+  denied: ["Camera permission is blocked", "Allow camera access for this site in the browser (lock icon in the address bar), then click Check Camera Again."],
+  nocamera: ["No camera found", "Connect a webcam to this computer, then click Check Camera Again."],
+  busy: ["Camera is in use by another app", "Close other apps or tabs using the camera, then click Check Camera Again."],
+  unsupported: ["Camera is not supported", "Please use the latest Chrome or Edge on a laptop or desktop."],
+  lost: ["Camera was disconnected", "Reconnect your camera, then click Check Camera Again."]
+};
+
 function runTestCase(code, funcName, args) {
   try {
     const body = '"use strict";\n' + code + "\nreturn " + funcName + "(...args);";
@@ -80,7 +99,67 @@ export default function SecondLevelExam() {
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => n + 1);
 
-  useProctor(phase === "exam");
+  // Camera + microphone monitoring during the exam. Background voice and
+  // camera movement only show a red note under the camera box — they never
+  // end the exam.
+  useProctor(phase === "exam", { voice: true });
+
+  // ---- Camera check on the start page (permission + device) ----
+  // Only checks that a camera is connected and allowed; no face detection here.
+  // status: checking | ok | denied | nocamera | busy | unsupported | lost
+  const mobileDevice = isMobileDevice();
+  const [camStatus, setCamStatus] = useState("checking");
+  const camStreamRef = useRef(null);
+
+  function stopCamStream() {
+    if (camStreamRef.current) {
+      camStreamRef.current.getTracks().forEach((t) => t.stop());
+      camStreamRef.current = null;
+    }
+  }
+
+  function checkCamera() {
+    stopCamStream();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCamStatus("unsupported");
+      return;
+    }
+    setCamStatus("checking");
+    navigator.mediaDevices
+      .getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false })
+      .then((s) => {
+        camStreamRef.current = s;
+        s.getVideoTracks().forEach((t) => t.addEventListener("ended", () => setCamStatus("lost")));
+        setCamStatus("ok");
+      })
+      .catch((err) => {
+        const name = err && err.name;
+        if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") setCamStatus("nocamera");
+        else if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") setCamStatus("busy");
+        else setCamStatus("denied");
+      });
+  }
+
+  useEffect(() => {
+    if (phase !== "start" || mobileDevice) return undefined;
+    checkCamera();
+    function onDeviceChange() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      navigator.mediaDevices.enumerateDevices().then((list) => {
+        if (!list.some((d) => d.kind === "videoinput")) setCamStatus("lost");
+      }).catch(() => {});
+    }
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
+    }
+    return () => {
+      if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+        navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
+      }
+      stopCamStream(); // release the camera so the exam page can open it
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mobileDevice]);
 
   // Anti-tab-switching monitor — shares the violation counter with leaving
   // fullscreen (handleLockdownViolation above).
@@ -155,6 +234,7 @@ export default function SecondLevelExam() {
   }
 
   function handleBegin() {
+    if (mobileDevice || camStatus !== "ok") return;
     setPhase("exam");
   }
 
@@ -288,9 +368,28 @@ export default function SecondLevelExam() {
                 <li>Use <strong>Run Code</strong> to execute your solution against visible and hidden test cases.</li>
                 <li>Your code must return the specified output format exactly.</li>
                 <li>The exam will auto-submit when the timer expires.</li>
+                <li>Your camera and microphone stay on during the exam. If background voice or movement in the camera is detected, a red warning appears under your camera box. Please sit alone in a quiet place.</li>
+                <li>Do not leave fullscreen or switch tabs/windows — a second violation auto-submits your attempt.</li>
               </ul>
             </div>
-            <button className="btn btn-primary w-100 fw-bold py-2" onClick={handleBegin}>
+            {mobileDevice ? (
+              <div className="alert alert-danger text-start small">
+                <strong>Mobile / tablet not allowed.</strong> This exam cannot be taken on a mobile phone or tablet. Please use a laptop or desktop computer with a webcam.
+              </div>
+            ) : camStatus !== "ok" ? (
+              <div className="alert alert-warning text-start small">
+                <div className="fw-bold">{(CAM_MESSAGES[camStatus] || CAM_MESSAGES.denied)[0]}</div>
+                <div>{(CAM_MESSAGES[camStatus] || CAM_MESSAGES.denied)[1]}</div>
+                {camStatus !== "checking" && (
+                  <button type="button" className="btn btn-sm btn-primary mt-2" onClick={checkCamera}>
+                    <i className="fa-solid fa-rotate me-1"></i>Check Camera Again
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="small text-success fw-bold mb-2"><i className="fa-solid fa-video me-1"></i>Camera connected</div>
+            )}
+            <button className="btn btn-primary w-100 fw-bold py-2" disabled={mobileDevice || camStatus !== "ok"} onClick={handleBegin}>
               Begin Assessment <i className="fa-solid fa-arrow-right ms-2"></i>
             </button>
           </div>

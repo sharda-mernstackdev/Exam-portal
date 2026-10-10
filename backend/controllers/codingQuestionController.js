@@ -16,7 +16,14 @@ const SecondLevelExam = require('../models/SecondLevelExam');
 exports.listActiveCodingQuestions = async (req, res) => {
   const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
   const filter = { active: true };
-  if (currentExam && currentExam.difficulty) filter.difficulty = currentExam.difficulty;
+  if (currentExam) {
+    // Several difficulty sets can be ticked on one config; older configs only
+    // have the single `difficulty` field.
+    const levels = currentExam.difficulties && currentExam.difficulties.length
+      ? currentExam.difficulties
+      : (currentExam.difficulty ? [currentExam.difficulty] : []);
+    if (levels.length) filter.difficulty = { $in: levels };
+  }
   const questions = await CodingQuestion.find(filter).sort({ createdAt: 1 });
   res.json(questions);
 };

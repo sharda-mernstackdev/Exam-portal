@@ -9,6 +9,10 @@ const SecondLevelExamSchema = new mongoose.Schema(
     // serves — candidates who log in while this exam's access window is
     // open (see submissionController's "current active SecondLevelExam"
     // lookup) get exactly the CodingQuestion docs matching this difficulty.
+    // One or more difficulty sets (e.g. ['Easy', 'Medium']) — the admin can
+    // tick several. `difficulty` is kept (= the first one ticked) so configs
+    // saved before multi-select existed keep working.
+    difficulties: [{ type: String, enum: ['Easy', 'Medium', 'Hard'] }],
     difficulty: { type: String, enum: ['Easy', 'Medium', 'Hard'] },
     questionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'CodingQuestion' }],
     // ---- Scheduled Round 2 access window ----

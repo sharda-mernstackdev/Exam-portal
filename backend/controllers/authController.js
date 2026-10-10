@@ -97,7 +97,8 @@ exports.round2Login = async (req, res) => {
     const secondExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
     if (secondExam && secondExam.startTime && secondExam.endTime) {
       const now = new Date();
-      const windowStart = new Date(secondExam.startTime);
+      // Login opens `loginWindowMinutes` before the Round 2 start time (0 = at start time).
+      const windowStart = new Date(new Date(secondExam.startTime).getTime() - (Number(secondExam.loginWindowMinutes) || 0) * 60000);
       const windowEnd = new Date(secondExam.endTime);
       if (now < windowStart) {
         return res.status(403).json({
@@ -111,7 +112,6 @@ exports.round2Login = async (req, res) => {
       }
     }
 
-    // Laptop / desktop only — phones and tablets cannot start Round 2.
     if (isMobileRequest(req)) {
       return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
     }

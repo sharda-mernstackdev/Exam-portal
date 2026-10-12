@@ -19,7 +19,7 @@ function ChartCard({ title, icon, canvasRef, caption, donutValue, donutLabel, wi
   );
 }
 
-export default function DashboardTab({ analytics, qualifyingPct, todayRegistrations }) {
+export default function DashboardTab({ analytics, qualifyingPct, todayRegistrations, totalRegistered = 0 }) {
   const { hasData, rows, totalCandidates, totalAttempted, totalNotAttempted, totalQs, passedCount, failedCount, passRate, attemptRate, avgPct, scoreBrackets, completionBuckets, top, chrono } = analytics;
 
   const todayExams = todayRegistrations?.exams || [];
@@ -95,16 +95,18 @@ export default function DashboardTab({ analytics, qualifyingPct, todayRegistrati
       <div className="stats-row">
         <div className="stat-card" style={{ borderLeft: "4px solid #0891b2" }}>
           <div>
-            <div className="stat-label">Today's Registrations</div>
-            <div className="stat-num" style={{ color: "#0891b2" }}>{todayTotal}</div>
+            <div className="stat-label">Total Registrations</div>
+            <div className="stat-num" style={{ color: "#0891b2" }}>{totalRegistered}</div>
             <div className="small text-muted">
-              {todayExams.length > 0 ? `Across ${todayExams.length} exam${todayExams.length > 1 ? "s" : ""} today` : "No exam scheduled today"}
+              {todayExams.length > 0
+                ? `${todayTotal} for today's exam${todayExams.length > 1 ? "s" : ""}`
+                : "Candidates registered so far"}
             </div>
           </div>
           <div className="stat-icon candidates"><i className="fa-solid fa-user-plus"></i></div>
         </div>
         <div className="stat-card" style={{ borderLeft: "4px solid #0284c7" }}>
-          <div><div className="stat-label">Total Candidates</div><div className="stat-num">{totalCandidates}</div></div>
+          <div><div className="stat-label">Candidates Appeared</div><div className="stat-num">{totalCandidates}</div></div>
           <div className="stat-icon candidates"><i className="fa-solid fa-users"></i></div>
         </div>
         <div className="stat-card" style={{ borderLeft: "4px solid #16a34a" }}>
@@ -114,10 +116,6 @@ export default function DashboardTab({ analytics, qualifyingPct, todayRegistrati
         <div className="stat-card" style={{ borderLeft: "4px solid #dc2626" }}>
           <div><div className="stat-label">Candidates Failed</div><div className="stat-num text-danger">{failedCount}</div></div>
           <div className="stat-icon failed"><i className="fa-solid fa-circle-xmark"></i></div>
-        </div>
-        <div className="stat-card" style={{ borderLeft: "4px solid #d97706" }}>
-          <div><div className="stat-label">Questions Attempted</div><div className="stat-num text-warning">{totalAttempted}</div></div>
-          <div className="stat-icon attempted"><i className="fa-solid fa-list-check"></i></div>
         </div>
         <div className="stat-card" style={{ borderLeft: "4px solid #9333ea" }}>
           <div><div className="stat-label">Avg. Score</div><div className="stat-num" style={{ color: "#9333ea" }}>{avgPct}%</div></div>

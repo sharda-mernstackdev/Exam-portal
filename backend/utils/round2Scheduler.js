@@ -64,7 +64,20 @@ async function sendDueRound2Emails() {
   }
 }
 
+// Every running backend that points at the same database runs this scheduler.
+// A backend started on a developer machine (FRONTEND_URL = localhost) would
+// grab students first and send them mails with a localhost link, so it only
+// sends mails when it is a real deployment (or RUN_SCHEDULER=true is set).
+function isLocalDev() {
+  const url = String(process.env.FRONTEND_URL || 'http://localhost:5173');
+  return /localhost|127\.0\.0\.1/i.test(url);
+}
+
 function startRound2Scheduler() {
+  if (isLocalDev() && String(process.env.RUN_SCHEDULER).toLowerCase() !== 'true') {
+    console.log('[round2-mail] scheduler not started on localhost (set RUN_SCHEDULER=true to test mails locally).');
+    return;
+  }
   setInterval(sendDueRound2Emails, 60 * 1000);
   sendDueRound2Emails();
 }

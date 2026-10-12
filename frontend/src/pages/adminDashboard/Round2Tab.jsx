@@ -131,6 +131,13 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       .catch((err) => alert(err.message || "Could not save Round 2 exam config."));
   }
 
+  function copyRound2Link() {
+    const link = `${window.location.origin}/round2-login`;
+    navigator.clipboard.writeText(link)
+      .then(() => alert("Round 2 link copied:\n" + link))
+      .catch(() => prompt("Copy this Round 2 link:", link));
+  }
+
   function handleExamDelete(id) {
     ExamAPI.adminDeleteSecondLevelExam(id).then(onSecondExamsChanged).catch((err) => alert(err.message || "Could not delete."));
   }
@@ -366,14 +373,6 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             </div>
             <div className="form-text">Tick one or more. Candidates get questions from all ticked sets.</div>
           </div>
-          <div className="col-md-2 d-flex align-items-end gap-2">
-            <button type="submit" className="btn btn-dark w-100 fw-bold">{editingExamId ? "Save Changes" : "+ Add Config"}</button>
-          </div>
-          {editingExamId && (
-            <div className="col-12">
-              <button type="button" className="btn btn-outline-secondary btn-sm fw-bold" onClick={cancelEditExam}>Cancel Edit</button>
-            </div>
-          )}
 
           <div className="col-12"><hr className="my-1" /></div>
           <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
@@ -402,6 +401,12 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
               value={examForm.loginWindowMinutes}
               onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
             <div className="form-text">Candidates can log in this many minutes before "Access Opens" (0 = exactly at Access Opens). Leave the dates blank for always-open access.</div>
+          </div>
+          <div className="col-12 d-flex gap-2 flex-wrap">
+            <button type="submit" className="btn btn-dark fw-bold px-4">{editingExamId ? "Save Changes" : "Save"}</button>
+            {editingExamId && (
+              <button type="button" className="btn btn-outline-secondary fw-bold" onClick={cancelEditExam}>Cancel Edit</button>
+            )}
           </div>
         </form>
       </div>
@@ -463,6 +468,9 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                     </div>
 
                     <div className="d-flex flex-wrap gap-2 mt-3">
+                      <button type="button" className="btn btn-sm btn-outline-primary" onClick={copyRound2Link}>
+                        <i className="fa-solid fa-link me-1"></i>Copy link
+                      </button>
                       <button type="button" className="btn-edit" onClick={() => startEditExam(ex)}>Edit</button>
                       <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => toggleCandidates(ex._id)}>
                         {openCandidatesFor === ex._id ? "Hide registrations" : "View registrations"}

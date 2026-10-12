@@ -31,8 +31,24 @@ export default function Instructions() {
   const navigate = useNavigate();
   const { ready, candidateName } = useSessionGuard();
   const tabSwitchCountRef = useRef(0);
+  // While the browser's camera / microphone permission box is open (and for a
+  // few seconds after "Allow" is clicked) the browser itself may drop
+  // fullscreen or blur the page. That is NOT the candidate's fault, so no
+  // violation is counted during this time.
+  const permGraceRef = useRef(true);
+  const graceTimerRef = useRef(null);
+
+  function startPermGrace() {
+    permGraceRef.current = true;
+    clearTimeout(graceTimerRef.current);
+  }
+  function endPermGraceSoon() {
+    clearTimeout(graceTimerRef.current);
+    graceTimerRef.current = setTimeout(() => { permGraceRef.current = false; }, 4000);
+  }
 
   function handleLockdownViolation() {
+    if (permGraceRef.current) return;
     tabSwitchCountRef.current++;
     if (tabSwitchCountRef.current >= 2) {
       alert("Violation Limit Reached! Returning to Login Screen.");
@@ -61,12 +77,16 @@ export default function Instructions() {
     }
   }
 
+  // Asks for the camera (required) and then the microphone (asked here so the
+  // browser does not pop up a permission box in the middle of the exam; if the
+  // microphone is refused the candidate can still continue).
   function checkCamera() {
     stopCamStream();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamStatus("unsupported");
       return;
     }
+    startPermGrace();
     setCamStatus("checking");
     navigator.mediaDevices
       .getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false })
@@ -75,9 +95,18 @@ export default function Instructions() {
         s.getVideoTracks().forEach((t) => {
           t.addEventListener("ended", () => setCamStatus("lost"));
         });
-        setCamStatus("ok");
+        // Microphone permission (optional) — asked right away, then released.
+        return navigator.mediaDevices
+          .getUserMedia({ audio: true, video: false })
+          .then((a) => { a.getTracks().forEach((t) => t.stop()); })
+          .catch(() => { /* microphone is optional */ })
+          .then(() => {
+            setCamStatus("ok");
+            endPermGraceSoon();
+          });
       })
       .catch((err) => {
+        endPermGraceSoon();
         const name = err && err.name;
         if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") setCamStatus("nocamera");
         else if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") setCamStatus("busy");
@@ -102,6 +131,7 @@ export default function Instructions() {
         navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
       }
       stopCamStream();
+      clearTimeout(graceTimerRef.current);
     };
   }, [ready, mobileDevice]);
 
@@ -185,7 +215,6 @@ export default function Instructions() {
 
   if (!ready) return null;
 
-  // Phones and tablets cannot take the exam.
   if (mobileDevice) {
     return (
       <div style={{ background: "#0f172a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe UI', Tahoma, sans-serif", padding: 16 }}>
@@ -211,10 +240,9 @@ export default function Instructions() {
     );
   }
 
-  // No camera (or access not allowed) -> the candidate cannot continue.
   if (!camOk) {
     const msgs = {
-      checking: ["Checking your camera…", "Please click \"Allow\" when the browser asks for camera access."],
+      checking: ["Checking your camera…", "Please click \"Allow\" when the browser asks for camera and microphone access."],
       denied: ["Camera access is blocked", "Allow camera access for this site (click the camera / lock icon in the address bar → Allow), then press \"Try Again\"."],
       nocamera: ["No camera found", "No webcam is connected to this computer. Connect a working webcam, then press \"Try Again\". Without a camera you cannot take this exam."],
       busy: ["Camera is in use", "Another app or browser tab is using your camera. Close it, then press \"Try Again\"."],
@@ -306,7 +334,7 @@ export default function Instructions() {
 
               <div className="card-footer bg-light p-3 px-4 d-flex justify-content-between align-items-center">
                 <span className="text-muted small">
-                  <i className="fa-solid fa-video text-success me-1"></i>Camera connected&nbsp;&nbsp;
+                  <i className="fa-solid fa-video text-success me-1"></i>Camera &amp; microphone checked&nbsp;&nbsp;
                   <i className="fa-solid fa-lock me-1"></i>Exam will begin automatically at the scheduled start time.
                 </span>
                 <span className="badge bg-primary px-3 py-2">

@@ -129,7 +129,7 @@ export default function AdminDashboard() {
         </div>
 
         <div className="main-wrapper">
-          {activeTab === "dashboard" && <DashboardTab analytics={analytics} qualifyingPct={qualifyingPct} todayRegistrations={todayRegistrations} />}
+          {activeTab === "dashboard" && <DashboardTab analytics={analytics} qualifyingPct={qualifyingPct} todayRegistrations={todayRegistrations} totalRegistered={students.length} />}
           {activeTab === "students" && <StudentsTab students={students} onDataChanged={loadAll} />}
           {activeTab === "examManagement" && (
             <ExamManagementTab

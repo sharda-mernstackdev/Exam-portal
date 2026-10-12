@@ -1,11 +1,14 @@
 const Student = require('../models/Student');
 const Submission = require('../models/Submission');
 const SecondLevelResult = require('../models/SecondLevelResult');
+const ExamAssignment = require('../models/ExamAssignment');
 
 // GET /api/admin/students — "Registered Students" tab in admin dashboard
 exports.listStudents = async (req, res) => {
-  const students = await Student.find({}, '-passwordHash').sort({ registeredAt: -1 });
-  res.json(students);
+  const students = await Student.find({}, '-passwordHash').sort({ registeredAt: -1 }).lean();
+  // Which students are registered for a Round 1 exam (have a Round 1 assignment).
+  const r1Ids = new Set((await ExamAssignment.find({ round: 1 }, 'student').lean()).map((a) => String(a.student)));
+  res.json(students.map((s) => ({ ...s, round1Registered: r1Ids.has(String(s._id)) })));
 };
 
 // DELETE /api/admin/students — clear all registered students (matches old

@@ -32,7 +32,6 @@ export default function Dashboard() {
   }
 
   const { fullscreen, enter } = useExamGuard(ready, handleLockdownViolation);
-
   const [questions, setQuestions] = useState(null); // null = loading
   const [currentIndex, setCurrentIndex] = useState(0);
   const [activeCategory, setActiveCategory] = useState("");

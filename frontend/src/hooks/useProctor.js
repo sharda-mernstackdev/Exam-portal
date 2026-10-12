@@ -78,7 +78,7 @@ function logEvent(type, detail, flash) {
 
 /**
  * useProctor(active, options) — turns the candidate's camera on, shows a small
- * live preview box (bottom-right, matching the old exam-proctor.js UI), and
+ * live preview box (bottom-right, draggable), and
  * watches for a covered/dark camera, no face, multiple faces, tab
  * switching, and window blur — logging each to localStorage + the backend.
  *
@@ -248,16 +248,18 @@ export function useProctor(active, options) {
       const box = document.createElement("div");
       box.id = "proctorCam";
       box.style.cssText =
-        "position:fixed;right:14px;top:70px;z-index:99998;width:190px;border-radius:10px;" +
+        "position:fixed;right:14px;bottom:14px;z-index:99998;width:170px;border-radius:10px;" +
         "overflow:hidden;background:#0f172a;box-shadow:0 6px 22px rgba(0,0,0,.35);" +
-        "font-family:'Segoe UI',Tahoma,sans-serif;border:2px solid #10b981;";
+        "font-family:'Segoe UI',Tahoma,sans-serif;border:2px solid #10b981;" +
+        "cursor:move;touch-action:none;";
+      box.title = "Drag to move the camera box";
 
       const video = document.createElement("video");
       video.autoplay = true;
       video.muted = true;
       video.playsInline = true;
       video.setAttribute("playsinline", "");
-      video.style.cssText = "display:block;width:100%;height:140px;object-fit:cover;background:#000;transform:scaleX(-1);";
+      video.style.cssText = "display:block;width:100%;height:120px;object-fit:cover;background:#000;transform:scaleX(-1);pointer-events:none;";
 
       const statusEl = document.createElement("div");
       statusEl.style.cssText = "padding:5px 8px;font-size:.72rem;font-weight:700;color:#e2e8f0;display:flex;align-items:center;gap:6px;";
@@ -270,6 +272,30 @@ export function useProctor(active, options) {
       box.appendChild(statusEl);
       box.appendChild(warnEl);
       document.body.appendChild(box);
+
+      // The candidate can drag the camera box anywhere on the screen so it never
+      // covers the question list or buttons. It starts in the bottom-right corner.
+      let drag = null;
+      box.addEventListener("pointerdown", (e) => {
+        const r = box.getBoundingClientRect();
+        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+        try { box.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        e.preventDefault();
+      });
+      box.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        const w = box.offsetWidth;
+        const h = box.offsetHeight;
+        const left = Math.min(Math.max(0, e.clientX - drag.dx), window.innerWidth - w);
+        const top = Math.min(Math.max(0, e.clientY - drag.dy), window.innerHeight - h);
+        box.style.left = left + "px";
+        box.style.top = top + "px";
+        box.style.right = "auto";
+        box.style.bottom = "auto";
+      });
+      const endDrag = () => { drag = null; };
+      box.addEventListener("pointerup", endDrag);
+      box.addEventListener("pointercancel", endDrag);
 
       boxRef.current = box;
       videoRef.current = video;

@@ -14,6 +14,7 @@ async function startSingleSession(student, deviceId) {
   student.activeSessionId = crypto.randomBytes(16).toString('hex');
   student.activeDeviceId = deviceId || '';
   student.lastSeenAt = new Date();
+  student.lastLoginAt = new Date(); // shows "Logged In" (instead of "Pending") in the admin Students tab
   await student.save();
   return student.activeSessionId;
 }

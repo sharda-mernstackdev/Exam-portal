@@ -54,6 +54,7 @@ const ExamAPI = {
   // ---- Admin auth ----
   adminLogin: (payload) => request("/auth/admin/login", { method: "POST", body: payload }),
   verifyAdmin: () => request("/auth/admin/verify", { auth: "admin" }),
+  adminChangePassword: (payload) => request("/auth/admin/change-password", { method: "POST", auth: "admin", body: payload }),
 
   // ---- Settings ----
   getSettings: () => request("/settings"),

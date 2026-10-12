@@ -167,6 +167,39 @@ exports.adminLogin = async (req, res) => {
   }
 };
 
+// POST /api/auth/admin/change-password
+// The logged-in admin changes their own password. The current password must
+// be given again, so a left-open admin screen cannot be used to take over.
+exports.changeAdminPassword = async (req, res) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || '');
+    const newPassword = String(req.body.newPassword || '');
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Please enter your current password and a new password.' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: 'The new password must be at least 8 characters long.' });
+    }
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ message: 'The new password must be different from the current password.' });
+    }
+
+    const admin = await Admin.findById(req.admin.id);
+    if (!admin) return res.status(404).json({ message: 'Admin account not found.' });
+
+    const ok = await bcrypt.compare(currentPassword, admin.passwordHash);
+    if (!ok) return res.status(401).json({ message: 'Current password is incorrect.' });
+
+    admin.passwordHash = await bcrypt.hash(newPassword, 10);
+    await admin.save();
+    res.json({ message: 'Password changed successfully.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error while changing the password.' });
+  }
+};
+
 exports.verifyAdmin = (req, res) => {
   res.json({ valid: true, admin: req.admin });
 };

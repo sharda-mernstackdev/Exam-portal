@@ -12,5 +12,6 @@ router.get('/student/verify', studentAuth, ctrl.verifyStudent);
 
 router.post('/admin/login', loginLimiter, ctrl.adminLogin);
 router.get('/admin/verify', adminAuth, ctrl.verifyAdmin);
+router.post('/admin/change-password', loginLimiter, adminAuth, ctrl.changeAdminPassword);
 
 module.exports = router;

@@ -13,6 +13,32 @@ export default function SettingsTab({ settings, totals, adminEmail, onSettingsCh
     });
   }, [settings]);
 
+  // ---- Change admin password ----
+  const [pwForm, setPwForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [pwMsg, setPwMsg] = useState({ type: "", text: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+
+  function handleChangePassword(e) {
+    e.preventDefault();
+    setPwMsg({ type: "", text: "" });
+    if (pwForm.newPassword.length < 8) {
+      setPwMsg({ type: "danger", text: "The new password must be at least 8 characters long." });
+      return;
+    }
+    if (pwForm.newPassword !== pwForm.confirmPassword) {
+      setPwMsg({ type: "danger", text: "New password and confirm password do not match." });
+      return;
+    }
+    setPwSaving(true);
+    ExamAPI.adminChangePassword({ currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword })
+      .then((res) => {
+        setPwForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+        setPwMsg({ type: "success", text: res.message || "Password changed successfully." });
+      })
+      .catch((err) => setPwMsg({ type: "danger", text: err.message || "Could not change the password." }))
+      .finally(() => setPwSaving(false));
+  }
+
   function handleRegenerate() {
     const code = Math.random().toString(36).slice(2, 8).toUpperCase();
     setForm({ ...form, accessCode: code });
@@ -91,6 +117,38 @@ export default function SettingsTab({ settings, totals, adminEmail, onSettingsCh
               </button>
             </div>
             <div className="form-text">Sent automatically to candidates who pass Round 1. Used on the separate Round 2 sign-in page.</div>
+          </div>
+        </form>
+      </div>
+
+      <div className="card-box">
+        <h6>Change Admin Password</h6>
+        <div className="sub">Enter your current password, then choose a new one (at least 8 characters)</div>
+        <form className="row g-3 align-items-end" onSubmit={handleChangePassword} autoComplete="off">
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Current Password</label>
+            <input type="password" className="form-control" required autoComplete="current-password"
+              value={pwForm.currentPassword} onChange={(e) => setPwForm({ ...pwForm, currentPassword: e.target.value })} />
+          </div>
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">New Password</label>
+            <input type="password" className="form-control" required minLength={8} autoComplete="new-password"
+              value={pwForm.newPassword} onChange={(e) => setPwForm({ ...pwForm, newPassword: e.target.value })} />
+          </div>
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Confirm New Password</label>
+            <input type="password" className="form-control" required minLength={8} autoComplete="new-password"
+              value={pwForm.confirmPassword} onChange={(e) => setPwForm({ ...pwForm, confirmPassword: e.target.value })} />
+          </div>
+          {pwMsg.text && (
+            <div className="col-12">
+              <div className={`small fw-bold text-${pwMsg.type}`}>{pwMsg.text}</div>
+            </div>
+          )}
+          <div className="col-12">
+            <button type="submit" disabled={pwSaving} className="btn btn-dark fw-bold px-4">
+              {pwSaving ? "Saving..." : "Change Password"}
+            </button>
           </div>
         </form>
       </div>

@@ -78,7 +78,7 @@ function logEvent(type, detail, flash) {
 
 /**
  * useProctor(active, options) — turns the candidate's camera on, shows a small
- * live preview box (bottom-right, draggable), and
+ * live preview box (bottom-right, matching the old exam-proctor.js UI), and
  * watches for a covered/dark camera, no face, multiple faces, tab
  * switching, and window blur — logging each to localStorage + the backend.
  *
@@ -251,8 +251,7 @@ export function useProctor(active, options) {
         "position:fixed;right:14px;bottom:14px;z-index:99998;width:170px;border-radius:10px;" +
         "overflow:hidden;background:#0f172a;box-shadow:0 6px 22px rgba(0,0,0,.35);" +
         "font-family:'Segoe UI',Tahoma,sans-serif;border:2px solid #10b981;" +
-        "cursor:move;touch-action:none;";
-      box.title = "Drag to move the camera box";
+        "cursor:default;user-select:none;";
 
       const video = document.createElement("video");
       video.autoplay = true;
@@ -273,29 +272,7 @@ export function useProctor(active, options) {
       box.appendChild(warnEl);
       document.body.appendChild(box);
 
-      // The candidate can drag the camera box anywhere on the screen so it never
-      // covers the question list or buttons. It starts in the bottom-right corner.
-      let drag = null;
-      box.addEventListener("pointerdown", (e) => {
-        const r = box.getBoundingClientRect();
-        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
-        try { box.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-        e.preventDefault();
-      });
-      box.addEventListener("pointermove", (e) => {
-        if (!drag) return;
-        const w = box.offsetWidth;
-        const h = box.offsetHeight;
-        const left = Math.min(Math.max(0, e.clientX - drag.dx), window.innerWidth - w);
-        const top = Math.min(Math.max(0, e.clientY - drag.dy), window.innerHeight - h);
-        box.style.left = left + "px";
-        box.style.top = top + "px";
-        box.style.right = "auto";
-        box.style.bottom = "auto";
-      });
-      const endDrag = () => { drag = null; };
-      box.addEventListener("pointerup", endDrag);
-      box.addEventListener("pointercancel", endDrag);
+      // The camera box is fixed in the bottom-right corner (it cannot be moved).
 
       boxRef.current = box;
       videoRef.current = video;

@@ -6,6 +6,7 @@ const Settings = require('../models/Settings');
 const SecondLevelExam = require('../models/SecondLevelExam');
 const { startSingleSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
+const { verifyGoogleIdToken } = require('../utils/googleAuth');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -87,6 +88,24 @@ exports.round2Login = async (req, res) => {
     }
     if (round2AccessCode.toUpperCase() !== validCode.toUpperCase()) {
       return res.status(401).json({ message: 'Incorrect Round 2 access code. Please check your invitation email.' });
+    }
+
+    // ---- Email ownership check (Google Sign-In) ----
+    // A forwarded Round 2 link must not work for anyone else: the person has
+    // to be signed in to the Google account of the registered email.
+    const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+    if (googleClientId) {
+      try {
+        const g = await verifyGoogleIdToken(req.body.googleToken, googleClientId);
+        if (g.email !== student.email.toLowerCase()) {
+          return res.status(403).json({
+            googleError: true,
+            message: `This Round 2 link was sent to ${student.email}. You are signed in as ${g.email}. Please open the link in Chrome signed in with ${student.email}.`
+          });
+        }
+      } catch (gErr) {
+        return res.status(403).json({ googleError: true, message: gErr.message });
+      }
     }
 
     // ---- Round 2 access-window enforcement ----

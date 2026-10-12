@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
+import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
 
 function formatDate(d) {
   if (!d) return "-";
@@ -40,6 +41,9 @@ export default function ExamAccessGate() {
   const [loadError, setLoadError] = useState("");
   const [starting, setStarting] = useState(false);
   const [accessError, setAccessError] = useState("");
+  const [googleToken, setGoogleToken] = useState("");
+  const [googleReset, setGoogleReset] = useState(0);
+  const needGoogle = !!GOOGLE_CLIENT_ID;
 
   useEffect(() => {
     ExamAPI.getPublicExamInfo(examId)
@@ -50,7 +54,7 @@ export default function ExamAccessGate() {
   function handleStart() {
     setStarting(true);
     setAccessError("");
-    ExamAPI.verifyExamAccess(examId, { email, accessCode: code, deviceId: getDeviceId() })
+    ExamAPI.verifyExamAccess(examId, { email, accessCode: code, deviceId: getDeviceId(), googleToken: googleToken || undefined })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);
@@ -64,6 +68,11 @@ export default function ExamAccessGate() {
       })
       .catch((err) => {
         setStarting(false);
+        if (err.data && err.data.googleError) {
+          // Google sign-in rejected / expired: ask for a fresh one.
+          setGoogleToken("");
+          setGoogleReset((n) => n + 1);
+        }
         setAccessError(err.message || "Could not verify exam access. Please try again.");
       });
   }
@@ -133,7 +142,11 @@ export default function ExamAccessGate() {
             <div className="alert alert-danger small">{accessError}</div>
           )}
 
-          <button type="button" disabled={starting} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
+          {needGoogle && (
+            <GoogleVerify expectedEmail={email} resetKey={googleReset} onVerified={setGoogleToken} />
+          )}
+
+          <button type="button" disabled={starting || (needGoogle && !googleToken)} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
             {starting ? (
               <><i className="fa-solid fa-spinner fa-spin me-2"></i>Verifying...</>
             ) : (

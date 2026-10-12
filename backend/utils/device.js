@@ -12,7 +12,11 @@ function isMobileRequest(req) {
   if (MOBILE_UA_RE.test(ua)) return true;
   // Chrome "mobile" Client Hint (sent by Chromium browsers on phones).
   const hint = String((req.headers && req.headers['sec-ch-ua-mobile']) || '');
-  return hint === '?1';
+  if (hint === '?1') return true;
+  // Phones that switch the browser to "Desktop site" hide their User-Agent, so
+  // the frontend (which can still see touch screen / small screen) tells us
+  // with this header on every request.
+  return String((req.headers && req.headers['x-device-mobile']) || '') === '1';
 }
 
 module.exports = { isMobileRequest, MOBILE_BLOCK_MESSAGE };

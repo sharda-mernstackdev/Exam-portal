@@ -4,6 +4,7 @@ import { useExamGuard } from "../hooks/useExamGuard";
 import FullscreenGate from "../components/FullscreenGate";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
+import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -17,13 +18,16 @@ export default function Round2Login() {
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const autoTriedRef = useRef(false);
+  const [googleToken, setGoogleToken] = useState("");
+  const [googleReset, setGoogleReset] = useState(0);
+  const needGoogle = !!GOOGLE_CLIENT_ID;
 
   const [forceManual, setForceManual] = useState(false);
   const prefilledFromLink = !!(searchParams.get("email") && searchParams.get("code")) && !forceManual;
 
   function doLogin(emailVal, codeVal) {
     setSubmitting(true);
-    ExamAPI.round2Login({ email: emailVal.trim(), round2AccessCode: codeVal.trim() })
+    ExamAPI.round2Login({ email: emailVal.trim(), round2AccessCode: codeVal.trim(), googleToken: googleToken || undefined })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);
@@ -34,6 +38,14 @@ export default function Round2Login() {
       })
       .catch((err) => {
         setSubmitting(false);
+        if (err.data && err.data.googleError) {
+          // Google sign-in rejected / expired: ask for a fresh one.
+          setGoogleToken("");
+          setGoogleReset((n) => n + 1);
+          autoTriedRef.current = false;
+          setErrors({ email: err.message });
+          return;
+        }
         if (err.status === 401 || err.status === 503) {
           setErrors({ accessCode: err.message || "Incorrect Round 2 access code." });
         } else if (err.status === 403 || err.status === 404 || err.status === 409) {
@@ -45,12 +57,12 @@ export default function Round2Login() {
   }
 
   useEffect(() => {
-    if (prefilledFromLink && fullscreen && !autoTriedRef.current) {
+    if (prefilledFromLink && fullscreen && !autoTriedRef.current && (!needGoogle || googleToken)) {
       autoTriedRef.current = true;
       doLogin(email, accessCode);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullscreen, prefilledFromLink]);
+  }, [fullscreen, prefilledFromLink, googleToken]);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -62,7 +74,8 @@ export default function Round2Login() {
     }
 
     const nextErrors = {};
-    if (!EMAIL_RE.test(email.trim())) nextErrors.email = "Please enter the email you registered with.";
+    if (needGoogle && !googleToken) nextErrors.email = "Please sign in with your registered Google account first.";
+    else if (!EMAIL_RE.test(email.trim())) nextErrors.email = "Please enter the email you registered with.";
     if (!accessCode.trim()) nextErrors.accessCode = "Please enter the Round 2 access code from your invitation email.";
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -115,8 +128,14 @@ export default function Round2Login() {
 
         {prefilledFromLink ? (
           <div style={{ padding: 40, textAlign: "center" }}>
-            <i className="fa-solid fa-spinner fa-spin fa-2x text-primary mb-3"></i>
-            <p className="text-muted mb-0">Signing you in and preparing Round 2...</p>
+            {needGoogle && !googleToken ? (
+              <GoogleVerify expectedEmail={email} resetKey={googleReset} onVerified={setGoogleToken} />
+            ) : (
+              <>
+                <i className="fa-solid fa-spinner fa-spin fa-2x text-primary mb-3"></i>
+                <p className="text-muted mb-0">Signing you in and preparing Round 2...</p>
+              </>
+            )}
             {errors.email || errors.accessCode ? (
               <>
                 <div className="text-danger small mt-3">{errors.email || errors.accessCode}</div>
@@ -159,6 +178,10 @@ export default function Round2Login() {
               </div>
               {errors.accessCode && <div className="text-danger small mt-1">{errors.accessCode}</div>}
             </div>
+
+            {needGoogle && (
+              <GoogleVerify expectedEmail={email.trim()} resetKey={googleReset} onVerified={setGoogleToken} />
+            )}
 
             <button type="submit" disabled={submitting} className="btn w-100 mb-2 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
               {submitting ? (

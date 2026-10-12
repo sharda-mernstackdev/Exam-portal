@@ -1,5 +1,6 @@
 const CodingQuestion = require('../models/CodingQuestion');
 const SecondLevelExam = require('../models/SecondLevelExam');
+const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 
 // GET /api/coding-questions — student-facing, hides the `hidden: true` test cases' expected output?
 // (kept simple: still needed client-side to run visible examples; hidden test cases are still required
@@ -14,6 +15,10 @@ const SecondLevelExam = require('../models/SecondLevelExam');
 // A config with no difficulty set (or none configured yet) falls back to
 // the full active bank, so nothing breaks for exams created before this.
 exports.listActiveCodingQuestions = async (req, res) => {
+  // The Round 2 paper is never served to a phone or tablet.
+  if (isMobileRequest(req)) {
+    return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
+  }
   const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
   const filter = { active: true };
   if (currentExam) {

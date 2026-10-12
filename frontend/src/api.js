@@ -5,7 +5,12 @@
  *
  * Change API_BASE_URL to wherever the backend/ server is actually running.
  */
-const API_BASE_URL = "http://localhost:5000/api";
+import { isMobileDevice } from "./utils/device";
+
+// Set VITE_API_URL (e.g. https://your-backend.example.com/api) in the
+// frontend's .env / hosting dashboard for the live site; localhost is only
+// the fallback for local development.
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 function studentToken() {
   return localStorage.getItem("studentToken") || "";
@@ -16,6 +21,8 @@ function adminToken() {
 
 function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  // Lets the server refuse phones / tablets even when they hide behind "Desktop site".
+  if (isMobileDevice()) headers["X-Device-Mobile"] = "1";
   if (options.auth === "student" && studentToken()) headers.Authorization = "Bearer " + studentToken();
   if (options.auth === "admin" && adminToken()) headers.Authorization = "Bearer " + adminToken();
 

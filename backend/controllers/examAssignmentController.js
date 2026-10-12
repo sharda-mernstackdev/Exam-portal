@@ -242,6 +242,26 @@ exports.verifyExamAccess = async (req, res) => {
       return res.status(401).json({ message: 'Incorrect access code. Please check your invitation email.' });
     }
 
+    // ---- Email ownership check (Google Sign-In) ----
+    // The exam link can be forwarded (WhatsApp, SMS, another person's Chrome).
+    // So opening it is not enough: the person must also be signed in to the
+    // Google account of the REGISTERED email. The email comes from Google's
+    // verified token, never from the link or the form.
+    const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+    if (googleClientId) {
+      try {
+        const g = await verifyGoogleIdToken(req.body.googleToken, googleClientId);
+        if (g.email !== student.email.toLowerCase()) {
+          return res.status(403).json({
+            googleError: true,
+            message: `This exam link was sent to ${student.email}. You are signed in as ${g.email}. Please open the link in Chrome signed in with ${student.email}.`
+          });
+        }
+      } catch (gErr) {
+        return res.status(403).json({ googleError: true, message: gErr.message });
+      }
+    }
+
     if (assignment.status === 'Completed') {
       return res.status(409).json({ message: 'You have already completed this exam.' });
     }

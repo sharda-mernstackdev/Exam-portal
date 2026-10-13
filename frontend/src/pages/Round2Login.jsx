@@ -8,6 +8,22 @@ import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// A random id kept in this browser's storage (same one the Round 1 link page
+// uses). The server uses it to tell "same device signing in again" (allowed)
+// from "a second device" (refused while the first one is still active).
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem("deviceId");
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2));
+      localStorage.setItem("deviceId", id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
+
 export default function Round2Login() {
   const navigate = useNavigate();
   const { fullscreen, enter } = useExamGuard(true);
@@ -27,7 +43,7 @@ export default function Round2Login() {
 
   function doLogin(emailVal, codeVal) {
     setSubmitting(true);
-    ExamAPI.round2Login({ email: emailVal.trim(), round2AccessCode: codeVal.trim(), googleToken: googleToken || undefined })
+    ExamAPI.round2Login({ email: emailVal.trim(), round2AccessCode: codeVal.trim(), deviceId: getDeviceId(), googleToken: googleToken || undefined })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);

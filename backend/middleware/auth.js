@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const Student = require('../models/Student');
+const { sessionFields } = require('../utils/session');
 
 function getToken(req) {
   const header = req.headers.authorization || '';
@@ -21,27 +22,49 @@ async function studentAuth(req, res, next) {
     return res.status(401).json({ message: 'Session expired or invalid. Please log in again.' });
   }
 
-  // Single-device check: the token must carry the student's CURRENT session
-  // id. A token without one (issued before this rule existed) or with an old
-  // one (the student signed in again on another device) is rejected.
+  // Single-device check: the token must carry the CURRENT session id of the
+  // round it was issued for (Round 1 token -> Round 1 session, Round 2 token
+  // -> Round 2 session; `rnd` is 2 only in tokens from the Round 2 login). A
+  // token without a session id, or with an old one (the same round was opened
+  // again after the first session went quiet), is rejected.
   try {
+    const round = payload.rnd === 2 ? 2 : 1;
+    const f = sessionFields(round);
     const student = payload.sid
-      ? await Student.findById(payload.id).select('activeSessionId').lean()
+      ? await Student.findById(payload.id).select(f.sid).lean()
       : null;
-    if (!student || student.activeSessionId !== payload.sid) {
+    if (!student || student[f.sid] !== payload.sid) {
       return res.status(401).json({
         message: 'You have been signed out because this account was opened on another device (or your session is no longer valid). Please log in again using your exam link.'
       });
     }
     // Heartbeat: marks this session as live so a second device is refused
-    // while this one is in use (see utils/session.js).
-    Student.updateOne({ _id: payload.id }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
+    // while this one is in use (see utils/session.js). Only the session that
+    // still owns the round can refresh it.
+    Student.updateOne({ _id: payload.id, [f.sid]: payload.sid }, { $set: { [f.seen]: new Date() } }).catch(() => {});
     req.student = payload;
     next();
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Could not verify your session.' });
   }
+}
+
+// Round gate for exam endpoints: a Round 1 session cannot be used for Round 2
+// calls (and the other way round), so each round is protected by its own
+// session. Use after studentAuth.
+function requireRound(round) {
+  return (req, res, next) => {
+    const tokenRound = req.student && req.student.rnd === 2 ? 2 : 1;
+    if (tokenRound !== round) {
+      return res.status(403).json({
+        message: round === 2
+          ? 'Please sign in to Round 2 with your Round 2 link.'
+          : 'This is a Round 1 action. Please use your Round 1 exam link.'
+      });
+    }
+    next();
+  };
 }
 
 // Server-side Round 2 gate. This is the actual security boundary — it is
@@ -51,6 +74,9 @@ async function studentAuth(req, res, next) {
 // (or whose eligibility was never set) is rejected here even with a
 // perfectly valid JWT.
 async function requireRound2Eligible(req, res, next) {
+  if (!req.student || req.student.rnd !== 2) {
+    return res.status(403).json({ message: 'Please sign in to Round 2 with your Round 2 link.' });
+  }
   try {
     const student = await Student.findById(req.student.id);
     if (!student) return res.status(404).json({ message: 'Student record not found.' });
@@ -79,4 +105,4 @@ function adminAuth(req, res, next) {
   }
 }
 
-module.exports = { studentAuth, adminAuth, requireRound2Eligible };
+module.exports = { studentAuth, adminAuth, requireRound2Eligible, requireRound };

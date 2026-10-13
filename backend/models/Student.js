@@ -15,6 +15,11 @@ const StudentSchema = new mongoose.Schema(
     // server — used to refuse a second device while the first is still active.
     activeDeviceId: { type: String },
     lastSeenAt: { type: Date },
+    // Round 2 has its own session (same idea, separate fields) so a Round 1
+    // session never blocks or signs out Round 2 and the other way round.
+    round2SessionId: { type: String },
+    round2DeviceId: { type: String },
+    round2LastSeenAt: { type: Date },
     // Multi-round progress tracking (mirrors the old roundProgressData shape)
     roundProgress: {
       r1: { type: String, enum: ['PENDING', 'PASS', 'FAIL'], default: 'PENDING' },

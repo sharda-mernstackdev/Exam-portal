@@ -4,7 +4,7 @@ const Student = require('../models/Student');
 const Admin = require('../models/Admin');
 const Settings = require('../models/Settings');
 const SecondLevelExam = require('../models/SecondLevelExam');
-const { startSingleSession } = require('../utils/session');
+const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { verifyGoogleIdToken } = require('../utils/googleAuth');
 
@@ -13,8 +13,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^[0-9]{10}$/;
 
 function signStudentToken(student, sid) {
+  // rnd: 2 marks this as a Round 2 session (validated against the Round 2
+  // session fields, see middleware/auth.js).
   return jwt.sign(
-    { id: student._id, email: student.email, name: student.fullName, role: 'student', sid },
+    { id: student._id, email: student.email, name: student.fullName, role: 'student', sid, rnd: 2 },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '6h' }
   );
@@ -135,8 +137,17 @@ exports.round2Login = async (req, res) => {
       return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
     }
 
-    const sid = await startSingleSession(student);
-    const token = signStudentToken(student, sid);
+    // ---- One device at a time (Round 2 session) ----
+    // Atomic: if this candidate already has a live Round 2 session on another
+    // device, this sign-in is refused (the first device keeps the exam).
+    const deviceId = String(req.body.deviceId || '').slice(0, 64);
+    const started = await startRoundSession(Student, student._id, 2, deviceId);
+    if (!started) {
+      return res.status(409).json({
+        message: 'Round 2 is already open on another device. Please continue on that device. If it was closed, wait about one minute and try again.'
+      });
+    }
+    const token = signStudentToken(student, started.sid);
     res.json({
       token,
       student: { id: student._id, fullName: student.fullName, email: student.email, phone: student.phone }

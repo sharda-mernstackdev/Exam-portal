@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const ctrl = require('../controllers/submissionController');
 const secondLevelCtrl = require('../controllers/secondLevelController');
-const { studentAuth, adminAuth, requireRound2Eligible } = require('../middleware/auth');
+const { studentAuth, adminAuth, requireRound2Eligible, requireRound } = require('../middleware/auth');
 
-router.post('/submissions', studentAuth, ctrl.createSubmission);
+router.post('/submissions', studentAuth, requireRound(1), ctrl.createSubmission);
 router.get('/submissions/mine', studentAuth, ctrl.myLatestSubmission);
 
 router.post('/second-level/submissions', studentAuth, requireRound2Eligible, secondLevelCtrl.createSecondLevelResult);

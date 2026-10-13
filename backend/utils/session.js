@@ -31,4 +31,41 @@ function isLoggedInElsewhere(student, deviceId) {
   return !deviceId || student.activeDeviceId !== deviceId;
 }
 
-module.exports = { startSingleSession, isLoggedInElsewhere, SESSION_ACTIVE_SECONDS };
+// Which Student fields hold the session of a round. Round 1 keeps using the
+// original fields; Round 2 has its own, so the two rounds never interfere.
+function sessionFields(round) {
+  return round === 2
+    ? { sid: 'round2SessionId', device: 'round2DeviceId', seen: 'round2LastSeenAt' }
+    : { sid: 'activeSessionId', device: 'activeDeviceId', seen: 'lastSeenAt' };
+}
+
+// Starts the session for `round` in ONE atomic database update, so two sign-ins
+// arriving at the same moment (two devices / two tabs) can never both succeed.
+// The update only matches when the round has no live session, or the old one
+// has been silent for SESSION_ACTIVE_SECONDS (closed tab / lost internet), or
+// it belongs to the same device (same browser signing in again, e.g. refresh).
+// Returns { sid } when the session was started, or null when another device
+// currently holds a live session (the caller refuses this sign-in).
+async function startRoundSession(Student, studentId, round, deviceId) {
+  const f = sessionFields(round);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - SESSION_ACTIVE_SECONDS * 1000);
+  const cleanDevice = String(deviceId || '').slice(0, 64);
+
+  const canStart = [
+    { [f.sid]: { $in: [null, ''] } },   // no session yet
+    { [f.seen]: null },                  // never seen (also matches missing)
+    { [f.seen]: { $lt: cutoff } }        // old session went quiet
+  ];
+  if (cleanDevice) canStart.push({ [f.device]: cleanDevice }); // same device
+
+  const sid = crypto.randomBytes(16).toString('hex');
+  const updated = await Student.findOneAndUpdate(
+    { _id: studentId, $or: canStart },
+    { $set: { [f.sid]: sid, [f.device]: cleanDevice, [f.seen]: now, lastLoginAt: now } },
+    { new: true }
+  );
+  return updated ? { sid } : null;
+}
+
+module.exports = { startSingleSession, isLoggedInElsewhere, startRoundSession, sessionFields, SESSION_ACTIVE_SECONDS };

@@ -4,7 +4,7 @@ const Exam = require('../models/Exam');
 const ExamAssignment = require('../models/ExamAssignment');
 const Settings = require('../models/Settings');
 const { sendExamInvitationEmail } = require('../utils/mailer');
-const { startSingleSession, isLoggedInElsewhere } = require('../utils/session');
+const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { lateLoginDeadline } = require('../utils/examWindow');
 const { verifyGoogleIdToken } = require('../utils/googleAuth');
@@ -296,11 +296,13 @@ exports.verifyExamAccess = async (req, res) => {
       }
     }
 
-    // ---- One device at a time ----
-    // If this candidate is already signed in (and active) on another
-    // device, refuse this sign-in instead of logging the first one out.
+    // ---- One device at a time (Round 1 session) ----
+    // Atomic: if this candidate already has a live Round 1 session on another
+    // device, this sign-in is refused instead of logging the first one out.
+    // Two devices signing in at the same moment cannot both succeed.
     const deviceId = String(req.body.deviceId || '').slice(0, 64);
-    if (isLoggedInElsewhere(student, deviceId)) {
+    const started = await startRoundSession(Student, student._id, 1, deviceId);
+    if (!started) {
       return res.status(409).json({
         message: 'You are already logged in on another device. Please continue the exam on that device. If it was closed, wait about one minute and try again.'
       });
@@ -312,10 +314,7 @@ exports.verifyExamAccess = async (req, res) => {
       await assignment.save();
     }
 
-    // Fresh single-device session: signs out any other device this student
-    // is currently logged in on (see utils/session.js).
-    const sid = await startSingleSession(student, deviceId);
-    const token = signStudentToken(student, sid);
+    const token = signStudentToken(student, started.sid);
     res.json({
       token,
       student: { id: student._id, fullName: student.fullName, email: student.email, phone: student.phone },

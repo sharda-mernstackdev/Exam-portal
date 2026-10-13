@@ -477,8 +477,8 @@ export default function SecondLevelExam() {
             <div className="bg-danger text-white px-3 py-1 rounded fw-bold">
               <i className="fa-regular fa-clock me-1"></i> {minutes}:{seconds}
             </div>
-            <button className="btn btn-outline-light btn-sm fw-bold" disabled={submitting} onClick={() => { if (window.confirm("Submit assessment? You cannot modify code after submission.")) submitExam(false); }}>
-              Submit Code
+            <button className="btn btn-outline-light btn-sm fw-bold" disabled={submitting} onClick={() => { if (window.confirm("Complete the exam? You cannot modify your code after this.")) submitExam(false); }}>
+              Complete Exam
             </button>
           </div>
         )}
@@ -662,7 +662,11 @@ export default function SecondLevelExam() {
                   )}
                 </div>
 
-                <div className="d-flex justify-content-between" style={{ gap: 10 }}>
+                {/* Prev / Next row. The camera box is fixed in the bottom-right corner (about
+                    184px wide), so the right padding keeps Next to the LEFT of it instead of
+                    underneath it. Pixel values scale with browser zoom exactly like the camera
+                    box does; flexWrap keeps both buttons visible on a narrow window. */}
+                <div className="d-flex justify-content-between" style={{ gap: 10, paddingRight: 160, flexWrap: "wrap" }}>
                   <button className="btn btn-outline-secondary fw-bold px-4" disabled={currentIndex === 0} onClick={handlePrev}>
                     <i className="fa-solid fa-arrow-left me-2"></i> Prev
                   </button>

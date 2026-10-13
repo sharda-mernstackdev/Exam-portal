@@ -96,17 +96,25 @@ export function useExamGuard(active, onExit) {
 
     function keyGuard(e) {
       const k = e.key;
+      // IMPORTANT: on `keypress` events the browser puts the typed CHARACTER's
+      // code in keyCode ('{' = 123, 'z' = 122), which is the same number as the
+      // F12 / F11 key codes. Only real key events (keydown / keyup) may be
+      // judged by keyCode, otherwise typing '{' or 'z' is wrongly blocked.
+      const kc = e.type === "keypress" ? 0 : e.keyCode;
+      // AltGr (used for { [ ] } \ @ etc. on many keyboard layouts) is reported
+      // by Windows as Ctrl+Alt, so it must not be mistaken for a Ctrl shortcut.
+      const altGr = !!(e.getModifierState && e.getModifierState("AltGraph"));
       const tag = (e.target && e.target.tagName) || "";
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable);
       const block =
-        k === "Escape" || k === "Esc" || e.keyCode === 27 ||
-        k === "F11" || e.keyCode === 122 ||
-        e.keyCode === 123 || // F12
+        k === "Escape" || k === "Esc" || kc === 27 ||
+        k === "F11" || kc === 122 ||
+        k === "F12" || kc === 123 || // F12
         (e.altKey && (k === "ArrowLeft" || k === "ArrowRight")) ||
         (e.altKey && k === "Tab") ||
-        (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74 || e.keyCode === 67)) ||
-        (e.ctrlKey && (e.keyCode === 85 || e.keyCode === 82 || e.keyCode === 87 ||
-                       e.keyCode === 78 || e.keyCode === 84 || e.keyCode === 80)) ||
+        (!altGr && e.ctrlKey && e.shiftKey && (kc === 73 || kc === 74 || kc === 67)) ||
+        (!altGr && e.ctrlKey && (kc === 85 || kc === 82 || kc === 87 ||
+                                 kc === 78 || kc === 84 || kc === 80)) ||
         (k === "Backspace" && !typing);
       if (block) {
         e.preventDefault();

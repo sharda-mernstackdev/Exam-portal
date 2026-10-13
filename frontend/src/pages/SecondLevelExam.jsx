@@ -152,10 +152,21 @@ export default function SecondLevelExam() {
   const [currentLang, setCurrentLang] = useState("javascript");
   const [code, setCode] = useState("");
   const [timeLeft, setTimeLeft] = useState(EXAM_DURATION_MIN * 60);
-  // Campus Mode: the SERVER fixes the deadline (when Begin is pressed) and keeps
-  // the latest auto-saved code; this page only counts down to that deadline.
-  // Online mode keeps the original local timer.
-  const [campus, setCampus] = useState(false);
+  // The SERVER fixes the deadline (when Begin is pressed) and tells this page
+  // which mode applies; the page only counts down to that deadline. The mode
+  // comes from the exam's own configuration on the server (never guessed here):
+  //  - "campus": submitted automatically at 0:00 (and by the server if needed);
+  //  - "online": the candidate must submit manually (Complete Exam) before the
+  //    deadline; nothing is submitted for them, and after the deadline the
+  //    server refuses the submission.
+  // null = the server could not be reached; the page then behaves as it
+  // originally did (local timer, auto-submit at 0:00).
+  const [mode, setMode] = useState(null);
+  const campus = mode === "campus";
+  const onlineMode = mode === "online";
+  const [serverClock, setServerClock] = useState(false);
+  const [resultKind, setResultKind] = useState("submitted"); // submitted | expired
+  const expiryPingedRef = useRef(false);
   const [durationMin, setDurationMin] = useState(EXAM_DURATION_MIN);
   const deadlineRef = useRef(null);   // server deadline (ms, server clock)
   const offsetRef = useRef(0);        // server clock minus this computer's clock
@@ -347,12 +358,12 @@ export default function SecondLevelExam() {
   // Reads the server's timer information (see GET /second-level/status).
   function applyTiming(t) {
     if (!t) return;
-    setCampus(!!t.campus);
-    if (!t.campus) return;
+    setMode(t.mode || (t.campus ? "campus" : "online"));
     setDurationMin(Number(t.durationMinutes) || EXAM_DURATION_MIN);
     if (t.started && t.deadlineAt) {
       offsetRef.current = Date.parse(t.serverTime) - Date.now();
       deadlineRef.current = Date.parse(t.deadlineAt);
+      setServerClock(true);
       setTimeLeft(Math.max(0, Number(t.remainingSeconds) || 0));
     } else {
       setTimeLeft((Number(t.durationMinutes) || EXAM_DURATION_MIN) * 60);
@@ -370,7 +381,7 @@ export default function SecondLevelExam() {
         setPhase("exam");
       })
       .catch((err) => {
-        if (err.status === 401 || err.status === 409) {
+        if (err.status === 401 || err.status === 409 || (err.status === 403 && err.data && err.data.expired)) {
           clearDrafts(draftOwnerRef.current);
           localStorage.removeItem("examStatus");
           localStorage.removeItem("studentToken");
@@ -396,22 +407,35 @@ export default function SecondLevelExam() {
         : (data && data.message) || "Your Round 2 exam has been submitted."
     );
     setResultScore(null);
+    setResultKind("submitted");
     setSubmitting(false);
     setPhase("result");
   }
 
-  // Timer - Online mode: the original local countdown.
+  // Online mode: the deadline passed and the exam was not submitted in time.
+  // The server refuses it; nothing was submitted for the candidate.
+  function showExpired(message) {
+    submittedRef.current = true;
+    setResultLine(message || "Your Round 2 time is over. This exam had to be submitted manually before the deadline, so it can no longer be submitted.");
+    setResultScore(null);
+    setResultKind("expired");
+    setSubmitting(false);
+    setPhase("result");
+  }
+
+  // Timer - fallback when the server's deadline is not known: the original
+  // local countdown.
   useEffect(() => {
-    if (phase !== "exam" || campus || timeLeft <= 0) return undefined;
+    if (phase !== "exam" || serverClock || timeLeft <= 0) return undefined;
     const id = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
     return () => clearTimeout(id);
-  }, [phase, timeLeft, campus]);
+  }, [phase, timeLeft, serverClock]);
 
-  // Timer - Campus mode: counts down to the SERVER's deadline, using the
-  // server's clock, so refreshing the page or changing this computer's clock
-  // does not change the time left.
+  // Timer - counts down to the SERVER's deadline, using the server's clock, so
+  // refreshing the page or changing this computer's clock does not change the
+  // time left (Campus and Online mode).
   useEffect(() => {
-    if (phase !== "exam" || !campus) return undefined;
+    if (phase !== "exam" || !serverClock) return undefined;
     function tick() {
       if (!deadlineRef.current) return;
       const rem = Math.max(0, Math.ceil((deadlineRef.current - (Date.now() + offsetRef.current)) / 1000));
@@ -420,14 +444,27 @@ export default function SecondLevelExam() {
     tick();
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
-  }, [phase, campus]);
+  }, [phase, serverClock]);
 
-  // Time is up -> submit automatically. submitExam can only run once (see
-  // submittedRef), however many times this effect fires.
+  // Time is up.
+  //  - Campus (or unknown mode): submit automatically. submitExam can only run
+  //    once (see submittedRef), however many times this effect fires.
+  //  - Online: NOTHING is submitted. The candidate had to press Complete Exam
+  //    before the deadline; the editor locks and the server refuses any later
+  //    submission. A single quiet request tells the server the deadline was
+  //    missed (it only records that in the proctor log).
   useEffect(() => {
-    if (phase === "exam" && timeLeft <= 0) submitExam(true, "time");
+    if (phase !== "exam" || timeLeft > 0) return;
+    if (onlineMode) {
+      if (!expiryPingedRef.current) {
+        expiryPingedRef.current = true;
+        setTimeout(() => { ExamAPI.getSecondLevelStatus().catch(() => {}); }, 12000);
+      }
+      return;
+    }
+    submitExam(true, "time");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, timeLeft]);
+  }, [phase, timeLeft, onlineMode]);
 
   // Campus mode: every 10 s send the server the current code of every
   // question (each with its own language). If the browser dies before the
@@ -612,6 +649,11 @@ export default function SecondLevelExam() {
           showServerFinalized({ ...(err.data || {}), autoSubmitted: (err.data && err.data.autoSubmitted) || reason === "time" });
           return;
         }
+        // 403 expired = Online mode and the deadline has passed.
+        if (err.status === 403 && err.data && err.data.expired) {
+          showExpired(err.data.message);
+          return;
+        }
         if (err.status === 401) {
           setSubmitting(false);
           alert(err.message || "Your session has ended. Please log in again.");
@@ -620,7 +662,7 @@ export default function SecondLevelExam() {
         // Network problem. When the time is up the exam must still be handed
         // in, so keep retrying every 3 s (the server also closes the exam
         // itself shortly after the deadline, from the code it already has).
-        if (reason === "time") {
+        if (reason === "time" && !(err.status >= 400 && err.status < 500)) {
           setTimeout(() => submitExam(true, "time"), 3000);
           return;
         }
@@ -649,12 +691,16 @@ export default function SecondLevelExam() {
 
   return (
     <div style={{ background: "#f4f6f9", fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif", userSelect: "none", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {phase === "exam" && timeLeft <= 0 && (
+      {phase === "exam" && timeLeft <= 0 && !(onlineMode && submitting) && (
         <div style={{ position: "fixed", inset: 0, zIndex: 100000, background: "rgba(15,23,42,0.88)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div className="bg-white text-center" style={{ borderRadius: 12, padding: 32, maxWidth: 460, width: "100%" }}>
             <i className="fa-solid fa-hourglass-end fa-3x text-danger mb-3"></i>
             <h4 className="fw-bold mb-2">Time is up!</h4>
-            <p className="text-muted mb-0">Your exam time has expired. Your exam is being submitted automatically. Please wait and do not close this window.</p>
+            {onlineMode ? (
+              <p className="text-muted mb-0">Your exam time has ended. This exam had to be submitted manually before the deadline, so it can no longer be submitted. Please contact the administrator.</p>
+            ) : (
+              <p className="text-muted mb-0">Your exam time has expired. Your exam is being submitted automatically. Please wait and do not close this window.</p>
+            )}
           </div>
         </div>
       )}
@@ -683,13 +729,17 @@ export default function SecondLevelExam() {
           <div className="bg-white text-center" style={{ borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.05)", padding: 40, maxWidth: 500, width: "100%" }}>
             <i className="fa-solid fa-code fa-3x text-primary mb-3"></i>
             <h4 className="fw-bold mb-1">Round 2: Technical & Coding</h4>
-            <p className="text-muted small mb-4">You have <span className="fw-bold">{campus ? durationMin : EXAM_DURATION_MIN}</span> minutes to solve algorithmic problems.</p>
+            <p className="text-muted small mb-4">You have <span className="fw-bold">{mode ? durationMin : EXAM_DURATION_MIN}</span> minutes to solve algorithmic problems.</p>
             <div className="text-start bg-light p-3 rounded mb-4 border">
               <ul className="mb-0 small text-secondary">
                 <li>Select your preferred programming language (JavaScript, Python, C++) from the code editor dropdown.</li>
                 <li>Use <strong>Run Code</strong> to execute your solution against visible and hidden test cases.</li>
                 <li>Your code must return the specified output format exactly.</li>
-                <li>The exam will auto-submit when the timer expires{campus ? " (the time is kept by the server, so refreshing the page does not restart it)" : ""}.</li>
+                {onlineMode ? (
+                  <li>You must click <strong>Complete Exam</strong> before the timer ends. This exam is <strong>not</strong> submitted automatically when the time is over and cannot be submitted after the deadline. The time is kept by the server, so refreshing the page does not restart it.</li>
+                ) : (
+                  <li>The exam will auto-submit when the timer expires{campus ? " (the time is kept by the server, so refreshing the page does not restart it)" : ""}.</li>
+                )}
                 <li>Your camera and microphone stay on during the exam. If background voice or movement in the camera is detected, a red warning appears under your camera box. Please sit alone in a quiet place.</li>
                 <li>Do not leave fullscreen or switch tabs/windows — a second violation auto-submits your attempt.</li>
               </ul>
@@ -878,8 +928,12 @@ export default function SecondLevelExam() {
       {phase === "result" && (
         <div className="flex-fill d-flex align-items-center justify-content-center" style={{ background: "#f4f6f9", overflowY: "auto" }}>
           <div className="bg-white text-center" style={{ borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.05)", padding: 40, maxWidth: 500, width: "100%" }}>
-            <i className="fa-solid fa-check-circle fa-4x text-success mb-3"></i>
-            <h3 className="fw-bold mb-1">Assessment Submitted</h3>
+            {resultKind === "expired" ? (
+              <i className="fa-solid fa-hourglass-end fa-4x text-danger mb-3"></i>
+            ) : (
+              <i className="fa-solid fa-check-circle fa-4x text-success mb-3"></i>
+            )}
+            <h3 className="fw-bold mb-1">{resultKind === "expired" ? "Time Expired" : "Assessment Submitted"}</h3>
             <p className="text-muted mb-4">{resultLine}</p>
             {resultScore && (
               <div className="bg-light p-4 rounded border mb-4">

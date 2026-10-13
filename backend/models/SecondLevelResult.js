@@ -20,6 +20,8 @@ const SecondLevelResultSchema = new mongoose.Schema(
     // '' = the candidate submitted manually. 'time' / 'violation' = the browser
     // auto-submitted. 'deadline' = the SERVER finalized the exam from the last
     // auto-saved copy because the deadline passed without a submission.
+    // 'missed' = Online mode: the candidate never submitted before the deadline
+    // (NOT SUBMITTED, score 0, no answers).
     autoSubmitReason: { type: String, default: '' }
   },
   { timestamps: true }

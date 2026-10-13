@@ -7,7 +7,7 @@ const { sendFinalSuccessEmail } = require('./mailer');
 const { getActiveCodingQuestions } = require('../controllers/codingQuestionController');
 const { logViolation } = require('./violation');
 
-// Round 2 timer rules (Campus Mode) - all enforced on the server.
+// Round 2 timer rules (Campus mode) - all enforced on the server.
 //  - The candidate's deadline is fixed by the server when Begin is pressed.
 //  - Auto-saved drafts are accepted until DRAFT_GRACE_MS after the deadline.
 //  - A normal submission is accepted until SUBMIT_GRACE_MS after the deadline
@@ -17,6 +17,12 @@ const { logViolation } = require('./violation');
 const DRAFT_GRACE_MS = 5 * 1000;
 const SUBMIT_GRACE_MS = 30 * 1000;
 const DEFAULT_ROUND2_MINUTES = 45; // the Round 2 page's original timer
+
+// Online mode: the candidate submits manually. The server accepts that
+// submission until the deadline plus this small allowance for network delay;
+// after that the exam can no longer be submitted (it is NOT auto-submitted).
+const ONLINE_SUBMIT_GRACE_MS = 10 * 1000;
+const ONLINE_EXPIRED_MESSAGE = 'Your Round 2 time is over. This exam had to be submitted manually before the deadline, so it can no longer be submitted. Please contact the administrator.';
 
 // 'campus' | 'online' - the mode of the exam this candidate registered for.
 // Round 2 has no mode of its own, so it follows the candidate's exam (an exam
@@ -79,19 +85,30 @@ function cleanAnswers(paper, clientAnswers) {
 //    refuses writes too, so the saved answers cannot change any more.
 //  - `useDraft: true` finalizes from the last draft the server received
 //    (browser gone / too late); otherwise from `answers` of the request.
+//  - `deadlineGraceMs` (Online mode): the deadline is part of the atomic
+//    claim itself, so a submission that arrives after deadline + grace cannot
+//    win even if it passed an earlier check a moment before.
 //
 // Returns { status, body }.
-async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason }) {
+async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason, deadlineGraceMs }) {
   let claimed = false;
   try {
+    const claimFilter = { _id: studentId, round2Completed: { $ne: true } };
+    if (deadlineGraceMs !== undefined) {
+      claimFilter.round2DeadlineAt = { $gte: new Date(Date.now() - deadlineGraceMs) };
+    }
     const student = await Student.findOneAndUpdate(
-      { _id: studentId, round2Completed: { $ne: true } },
+      claimFilter,
       { $set: { round2Completed: true } },
       { new: true }
     );
     if (!student) {
-      const exists = await Student.exists({ _id: studentId });
-      if (!exists) return { status: 404, body: { message: 'Student record not found.' } };
+      const cur = await Student.findById(studentId).select('round2Completed');
+      if (!cur) return { status: 404, body: { message: 'Student record not found.' } };
+      if (!cur.round2Completed && deadlineGraceMs !== undefined) {
+        await noteOnlineExpiry(studentId);
+        return { status: 403, body: { expired: true, message: ONLINE_EXPIRED_MESSAGE } };
+      }
       return { status: 409, body: { message: 'You have already completed Round 2. Multiple attempts are not allowed.', completed: true } };
     }
     claimed = true;
@@ -160,14 +177,53 @@ async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason
   }
 }
 
+// Online mode: the deadline passed without a manual submission. Nothing is
+// submitted for the candidate (no answers are taken from anywhere). Once
+// (atomically) this records the event in the proctor log AND adds a
+// "NOT SUBMITTED" result row (score 0, FAIL, empty answers) so the admin sees
+// it in the Round 2 results. No success email is sent.
+async function noteOnlineExpiry(studentId) {
+  const first = await Student.findOneAndUpdate(
+    { _id: studentId, round2Completed: { $ne: true }, round2ExpiredAt: null },
+    { $set: { round2ExpiredAt: new Date() } },
+    { new: true }
+  );
+  if (!first) return;
+  await logViolation(
+    studentId,
+    'server_round2_online_expired',
+    'Round 2 (Online mode): the deadline passed without a manual submission. The exam can no longer be submitted.',
+    'round2-deadline'
+  );
+  try {
+    const exists = await SecondLevelResult.exists({ student: studentId });
+    if (!exists) {
+      await SecondLevelResult.create({
+        student: first._id,
+        name: first.fullName,
+        email: first.email,
+        answers: [],
+        totalScore: 0,
+        round2Status: 'FAIL',
+        autoSubmitReason: 'missed'
+      });
+    }
+    await Student.updateOne({ _id: studentId }, { $set: { 'roundProgress.r2': 'FAIL' } });
+  } catch (err) {
+    console.error('Could not record the missed Round 2 online deadline:', err);
+  }
+}
+
 // If this candidate's deadline (plus the submit grace) has passed and the
-// exam is still open, finalize it from the last draft.
+// exam is still open, finalize it from the last draft. CAMPUS MODE ONLY: an
+// Online-mode attempt is never submitted by the server.
 // Returns 'finalized' | 'already' (someone else finalized it) | 'none' (not
 // expired) | 'failed' (could not save - will be retried).
 async function finalizeIfExpired(studentId) {
   const expired = await Student.exists({
     _id: studentId,
     round2Completed: { $ne: true },
+    round2Mode: { $ne: 'online' },
     round2DeadlineAt: { $lte: new Date(Date.now() - SUBMIT_GRACE_MS) }
   });
   if (!expired) return 'none';
@@ -180,10 +236,13 @@ async function finalizeIfExpired(studentId) {
 module.exports = {
   DRAFT_GRACE_MS,
   SUBMIT_GRACE_MS,
+  ONLINE_SUBMIT_GRACE_MS,
+  ONLINE_EXPIRED_MESSAGE,
   DEFAULT_ROUND2_MINUTES,
   getRound2Mode,
   getRound2DurationMinutes,
   cleanAnswers,
   finalizeRound2,
-  finalizeIfExpired
+  finalizeIfExpired,
+  noteOnlineExpiry
 };

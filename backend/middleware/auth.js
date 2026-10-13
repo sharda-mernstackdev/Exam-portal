@@ -2,7 +2,13 @@ const jwt = require('jsonwebtoken');
 const Student = require('../models/Student');
 const { sessionFields } = require('../utils/session');
 const SecondLevelResult = require('../models/SecondLevelResult');
-const { SUBMIT_GRACE_MS, finalizeIfExpired } = require('../utils/round2Finalize');
+const {
+  SUBMIT_GRACE_MS,
+  ONLINE_SUBMIT_GRACE_MS,
+  ONLINE_EXPIRED_MESSAGE,
+  finalizeIfExpired,
+  noteOnlineExpiry
+} = require('../utils/round2Finalize');
 
 function getToken(req) {
   const header = req.headers.authorization || '';
@@ -85,10 +91,20 @@ async function requireRound2Eligible(req, res, next) {
     if (!student.round2Eligible || student.roundProgress.r1 !== 'PASS') {
       return res.status(403).json({ message: 'You are not eligible for Round 2.' });
     }
+    // Online Mode deadline, enforced here for EVERY Round 2 call: the candidate
+    // must submit manually before it. After the deadline (plus a few seconds
+    // for network delay) nothing can be fetched or submitted any more. The
+    // exam is NOT submitted for the candidate.
+    const online = student.round2Mode === 'online';
+    if (!student.round2Completed && online && student.round2DeadlineAt &&
+        Date.now() > new Date(student.round2DeadlineAt).getTime() + ONLINE_SUBMIT_GRACE_MS) {
+      await noteOnlineExpiry(student._id);
+      return res.status(403).json({ expired: true, message: ONLINE_EXPIRED_MESSAGE });
+    }
     // Campus Mode deadline, enforced here for EVERY Round 2 call: once the
     // candidate's deadline (plus the short submit grace) has passed, the exam
     // is finalized from the last auto-saved copy before anything else runs.
-    if (!student.round2Completed && student.round2DeadlineAt &&
+    if (!student.round2Completed && !online && student.round2DeadlineAt &&
         Date.now() > new Date(student.round2DeadlineAt).getTime() + SUBMIT_GRACE_MS) {
       const outcome = await finalizeIfExpired(student._id);
       if (outcome === 'failed') {

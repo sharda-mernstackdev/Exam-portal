@@ -4,6 +4,8 @@ const {
   DRAFT_GRACE_MS,
   getRound2Mode,
   getRound2DurationMinutes,
+  ONLINE_SUBMIT_GRACE_MS,
+  ONLINE_EXPIRED_MESSAGE,
   finalizeRound2,
   finalizeIfExpired
 } = require('../utils/round2Finalize');
@@ -27,51 +29,85 @@ const {
 // by the browser. The server cannot re-run it without a sandboxed code judge
 // (a separate execution service); until one exists, a modified browser could
 // over-report `passed` within the 0..total range. See the Bug #4 notes.
+//
+// Online mode: the candidate submits manually (Complete Exam). The server
+// only accepts that while the deadline (set when Begin was pressed, plus a few
+// seconds for network delay) has not passed - checked inside the atomic claim.
+// The exam is never submitted on the candidate's behalf in Online mode.
 exports.createSecondLevelResult = async (req, res) => {
-  const { answers, totalScore, reason } = req.body;
-  const autoSubmitReason = ['time', 'violation'].includes(reason) ? reason : '';
-  const out = await finalizeRound2({
-    studentId: req.student.id,
-    answers,
-    totalScore,
-    reason: autoSubmitReason
-  });
-  res.status(out.status).json(out.body);
+  try {
+    const { answers, totalScore, reason } = req.body;
+    const autoSubmitReason = ['time', 'violation'].includes(reason) ? reason : '';
+    const studentId = req.student.id;
+
+    const st = await Student.findById(studentId).select('round2Mode round2StartedAt round2DeadlineAt');
+    // The mode is fixed at Begin; before Begin it is read from the exam's configuration.
+    const mode = st && st.round2StartedAt ? (st.round2Mode || 'campus') : await getRound2Mode(studentId);
+    let deadlineGraceMs;
+    if (mode === 'online') {
+      if (!st || !st.round2DeadlineAt) {
+        return res.status(403).json({ notStarted: true, message: 'Please press "Begin Assessment" to start the exam before submitting it.' });
+      }
+      deadlineGraceMs = ONLINE_SUBMIT_GRACE_MS;
+    }
+
+    const out = await finalizeRound2({
+      studentId,
+      answers,
+      totalScore,
+      reason: autoSubmitReason,
+      deadlineGraceMs
+    });
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Could not save second-level result.' });
+  }
 };
 
-// ---- Round 2 timer (Campus Mode) -----------------------------------------
+// ---- Round 2 timer (Campus and Online mode) -----------------------------------------
 // GET  /api/second-level/status  - what mode / duration applies, and the
 //                                  deadline if the exam was already started
 // POST /api/second-level/start   - the candidate pressed Begin: the server
 //                                  fixes the start time and deadline (once;
 //                                  calling it again returns the same deadline,
 //                                  so a refresh cannot restart the clock)
-// In Online mode nothing is stored and the page keeps its own timer.
+// Both modes get a server-side start time and deadline. `mode` ('campus' |
+// 'online') comes from the candidate's exam configuration (Exam.examMode) and
+// is frozen when Begin is pressed - the browser never decides it.
 async function timing(req, res, begin) {
   try {
     const studentId = req.student.id;
-    const mode = await getRound2Mode(studentId);
     const durationMinutes = await getRound2DurationMinutes();
     const now = new Date();
-    if (mode !== 'campus') {
-      return res.json({ campus: false, durationMinutes, serverTime: now.toISOString() });
-    }
 
-    let st = await Student.findById(studentId).select('round2StartedAt round2DeadlineAt');
+    const fields = 'round2StartedAt round2DeadlineAt round2Mode';
+    let st = await Student.findById(studentId).select(fields);
+    if (!st) return res.status(404).json({ message: 'Student record not found.' });
+    const liveMode = await getRound2Mode(studentId);
+
     if (begin && !st.round2StartedAt) {
       const started = await Student.findOneAndUpdate(
         { _id: studentId, round2Completed: { $ne: true }, round2StartedAt: null },
-        { $set: { round2StartedAt: now, round2DeadlineAt: new Date(now.getTime() + durationMinutes * 60000) } },
+        { $set: {
+            round2StartedAt: now,
+            round2DeadlineAt: new Date(now.getTime() + durationMinutes * 60000),
+            round2Mode: liveMode
+        } },
         { new: true }
       );
-      st = started || (await Student.findById(studentId).select('round2StartedAt round2DeadlineAt'));
+      st = started || (await Student.findById(studentId).select(fields));
     }
-    if (!st || !st.round2DeadlineAt) {
-      return res.json({ campus: true, started: false, durationMinutes, serverTime: now.toISOString() });
+    // After Begin the stored mode wins (an attempt started before modes were
+    // stored counts as campus, as it always did).
+    const mode = st.round2StartedAt ? (st.round2Mode || 'campus') : liveMode;
+    if (!st.round2DeadlineAt) {
+      return res.json({ mode, campus: mode === 'campus', started: false, durationMinutes, serverTime: now.toISOString() });
     }
     const deadline = new Date(st.round2DeadlineAt);
     res.json({
-      campus: true,
+      mode,
+      campus: mode === 'campus',
       started: true,
       durationMinutes,
       startedAt: st.round2StartedAt,
@@ -100,10 +136,11 @@ exports.round2Start = (req, res) => timing(req, res, true);
 exports.saveSecondLevelDraft = async (req, res) => {
   try {
     const studentId = req.student.id;
-    const st = await Student.findById(studentId).select('round2DeadlineAt round2Completed');
+    const st = await Student.findById(studentId).select('round2DeadlineAt round2Completed round2Mode');
     if (!st) return res.status(404).json({ message: 'Student record not found.' });
-    // No server deadline (Online mode / not started): nothing to save.
-    if (!st.round2DeadlineAt) return res.json({ saved: false });
+    // Drafts are only kept for Campus mode (the server submits from them at the
+    // deadline). Online mode is submitted manually; not started: nothing to save.
+    if (st.round2Mode === 'online' || !st.round2DeadlineAt) return res.json({ saved: false });
 
     const input = Array.isArray(req.body && req.body.answers) ? req.body.answers.slice(0, 50) : [];
     const answers = input

@@ -17,8 +17,10 @@ async function sweepExpiredRound2() {
   if (running) return;
   running = true;
   try {
+    // Campus mode only: an Online-mode attempt is never submitted by the server.
     const due = await Student.find({
       round2Completed: { $ne: true },
+      round2Mode: { $ne: 'online' },
       round2DeadlineAt: { $lte: new Date(Date.now() - SUBMIT_GRACE_MS) }
     }).select('_id').limit(100);
     for (const s of due) {

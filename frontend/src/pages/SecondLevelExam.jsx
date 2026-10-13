@@ -27,6 +27,38 @@ const CAM_MESSAGES = {
   lost: ["Camera was disconnected", "Reconnect your camera, then click Check Camera Again."]
 };
 
+// ---- Per-question code drafts (survive a refresh / re-login on this browser) ----
+// Every draft is stored under: round 2 + candidate (id from the signed-in
+// token) + the question's own id + the language. Nothing is keyed by the
+// question's position, so one question's code can never land in another's.
+function getDraftOwner() {
+  try {
+    const t = localStorage.getItem("studentToken") || "";
+    const payload = JSON.parse(atob(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return String(payload.id || payload.email || "");
+  } catch (e) {
+    return String(localStorage.getItem("candidateEmail") || "");
+  }
+}
+function draftCodeKey(owner, qid, lang) { return `r2code:${owner}:${qid}:${lang}`; }
+function draftLangKey(owner, qid) { return `r2lang:${owner}:${qid}`; }
+function readDraft(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function writeDraft(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage full / blocked: memory copy still works */ }
+}
+function clearDrafts(owner) {
+  try {
+    const drop = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.indexOf(`r2code:${owner}:`) === 0 || k.indexOf(`r2lang:${owner}:`) === 0)) drop.push(k);
+    }
+    drop.forEach((k) => localStorage.removeItem(k));
+  } catch (e) { /* ignore */ }
+}
+
 function runTestCase(code, funcName, args) {
   try {
     const body = '"use strict";\n' + code + "\nreturn " + funcName + "(...args);";
@@ -92,8 +124,17 @@ export default function SecondLevelExam() {
   const [resultLine, setResultLine] = useState("");
   const [resultScore, setResultScore] = useState({ passed: 0, total: 0 });
   const [submitting, setSubmitting] = useState(false);
+  const [clipMsg, setClipMsg] = useState("");
+  const clipMsgTimerRef = useRef(null);
+  const lastClipLogRef = useRef(0);
 
+  // Source of truth for the candidate's code: userCodeRef.current[questionId][language].
+  // It is written on every keystroke (see setQuestionCode), so there is never a
+  // "pending save" that a later navigation or a stale closure could apply to the
+  // wrong question. langByQRef remembers which language each question is in.
   const userCodeRef = useRef({}); // userCode[q.id][lang]
+  const langByQRef = useRef({}); // q.id -> language
+  const draftOwnerRef = useRef("");
   const questionStatusRef = useRef({}); // q.id -> status
   const lastRunRef = useRef({}); // q.id -> evalResult
   const [, forceRender] = useState(0);
@@ -194,23 +235,34 @@ export default function SecondLevelExam() {
         }
         return ExamAPI.getCodingQuestions();
       })
-      .then((qs) => {
-        if (!qs) return;
-        if (!qs.length) {
+      .then((rawQs) => {
+        if (!rawQs) return;
+        if (!rawQs.length) {
           alert("No Round 2 questions are available right now. Please contact the administrator.");
           navigate("/login", { replace: true });
           return;
         }
+        // The server sends MongoDB's `_id`. Give every question one stable
+        // string id (never its array position) and use it everywhere.
+        const qs = rawQs.map((q) => ({ ...q, id: String(q._id || q.id) }));
+        const owner = getDraftOwner();
+        draftOwnerRef.current = owner;
         qs.forEach((q) => {
-          userCodeRef.current[q.id] = {
-            javascript: q.starterCode.javascript,
-            python: q.starterCode.python,
-            cpp: q.starterCode.cpp
-          };
+          const starter = q.starterCode || {};
+          const codes = {};
+          ["javascript", "python", "cpp"].forEach((lang) => {
+            const draft = readDraft(draftCodeKey(owner, q.id, lang));
+            codes[lang] = draft !== null ? draft : (starter[lang] || "");
+          });
+          userCodeRef.current[q.id] = codes; // a fresh object per question
+          const savedLang = readDraft(draftLangKey(owner, q.id));
+          langByQRef.current[q.id] = ["javascript", "python", "cpp"].includes(savedLang) ? savedLang : "javascript";
           questionStatusRef.current[q.id] = "not-attempted";
         });
         setQuestions(qs);
-        setCode(qs[0].starterCode.javascript);
+        setCurrentIndex(0);
+        setCurrentLang(langByQRef.current[qs[0].id]);
+        setCode(userCodeRef.current[qs[0].id][langByQRef.current[qs[0].id]]);
         setPhase("start");
       })
       .catch((err) => {
@@ -223,14 +275,26 @@ export default function SecondLevelExam() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function saveCode(nextCode = code) {
-    if (!questions) return;
-    userCodeRef.current[questions[currentIndex].id][currentLang] = nextCode;
+  // Writes `value` as the code of ONE question in ONE language (memory + draft).
+  function setQuestionCode(qid, lang, value) {
+    if (!userCodeRef.current[qid]) return;
+    userCodeRef.current[qid][lang] = value;
+    writeDraft(draftCodeKey(draftOwnerRef.current, qid, lang), value);
   }
 
-  function loadQuestionInto(idx, lang) {
+  function setQuestionLang(qid, lang) {
+    langByQRef.current[qid] = lang;
+    writeDraft(draftLangKey(draftOwnerRef.current, qid), lang);
+  }
+
+  // Shows question `idx`: its own language and its own code (or starter).
+  function loadQuestionInto(idx) {
+    const target = questions[idx];
+    if (!target) return;
+    const lang = langByQRef.current[target.id] || "javascript";
     setCurrentIndex(idx);
-    setCode(userCodeRef.current[questions[idx].id][lang]);
+    setCurrentLang(lang);
+    setCode(userCodeRef.current[target.id][lang]);
   }
 
   function handleBegin() {
@@ -251,13 +315,13 @@ export default function SecondLevelExam() {
   }, [phase, timeLeft]);
 
   function handleLangChange(lang) {
-    saveCode();
+    const cur = questions[currentIndex];
+    setQuestionLang(cur.id, lang);
     setCurrentLang(lang);
-    setCode(userCodeRef.current[questions[currentIndex].id][lang]);
+    setCode(userCodeRef.current[cur.id][lang]);
   }
 
   function handleRun() {
-    saveCode();
     const q = questions[currentIndex];
     const evalResult = evaluateQuestion(q, userCodeRef.current[q.id][currentLang], currentLang);
     lastRunRef.current[q.id] = evalResult;
@@ -268,45 +332,109 @@ export default function SecondLevelExam() {
   function handleReset() {
     const q = questions[currentIndex];
     if (!window.confirm("Reset code to starter template for this language?")) return;
-    userCodeRef.current[q.id][currentLang] = q.starterCode[currentLang];
-    setCode(q.starterCode[currentLang]);
+    const starter = (q.starterCode && q.starterCode[currentLang]) || "";
+    setQuestionCode(q.id, currentLang, starter);
+    setCode(starter);
     lastRunRef.current[q.id] = null;
     rerender();
   }
 
   function handleNext() {
-    saveCode();
-    if (currentIndex < questions.length - 1) loadQuestionInto(currentIndex + 1, currentLang);
+    if (currentIndex < questions.length - 1) loadQuestionInto(currentIndex + 1);
   }
   function handlePrev() {
-    saveCode();
-    if (currentIndex > 0) loadQuestionInto(currentIndex - 1, currentLang);
+    if (currentIndex > 0) loadQuestionInto(currentIndex - 1);
+  }
+
+  // ---- No copy / cut / paste in the code editor ----
+  // The code must be typed by the candidate. This blocks the ordinary
+  // clipboard routes inside the editor itself (keyboard shortcuts, the
+  // right-click menu, the browser menu, drag-and-drop of text, and a paste that
+  // arrives as an input event). Typing, Tab indent, selecting, Ctrl/Cmd+A,
+  // undo/redo, Run and Submit are untouched. A browser cannot stop every
+  // possible way of getting text in (e.g. a typing-automation tool or
+  // another device), so the server-side checks and the proctoring log stay
+  // in place; each blocked attempt is also recorded in the proctor log.
+  function clipboardBlocked(what) {
+    setClipMsg("Copy, cut and paste are disabled in the code editor. Please type your code.");
+    clearTimeout(clipMsgTimerRef.current);
+    clipMsgTimerRef.current = setTimeout(() => setClipMsg(""), 3000);
+    const now = Date.now();
+    if (now - lastClipLogRef.current > 8000) {
+      lastClipLogRef.current = now;
+      try {
+        ExamAPI.logProctorEvent({ type: "clipboard_blocked", detail: "Tried to " + what + " in the code editor", page: location.pathname }).catch(() => {});
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  function blockClipboardEvent(what) {
+    return (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      clipboardBlocked(what);
+    };
+  }
+
+  function handleEditorChange(e) {
+    // A paste / drop / cut that slipped past the handlers above shows up here
+    // as an input event of that type: ignore it (the controlled textarea
+    // then keeps its previous text).
+    const t = e.nativeEvent && e.nativeEvent.inputType;
+    if (t === "insertFromPaste" || t === "insertFromPasteAsQuotation" || t === "insertFromDrop" || t === "insertFromYank" || t === "deleteByCut") {
+      clipboardBlocked(t === "deleteByCut" ? "cut" : "paste");
+      return;
+    }
+    setCode(e.target.value);
+    setQuestionCode(questions[currentIndex].id, currentLang, e.target.value);
   }
 
   function handleEditorKeyDown(e) {
+    const key = (e.key || "").toLowerCase();
+    const mod = e.ctrlKey || e.metaKey; // Ctrl on Windows/Linux, Cmd on macOS
+    if (mod && !e.altKey && (key === "c" || key === "v" || key === "x")) {
+      e.preventDefault();
+      e.stopPropagation();
+      clipboardBlocked(key === "c" ? "copy" : key === "x" ? "cut" : "paste");
+      return;
+    }
+    // Older shortcuts for the same actions.
+    if ((e.ctrlKey && key === "insert") || (e.shiftKey && key === "insert") || (e.shiftKey && key === "delete")) {
+      e.preventDefault();
+      e.stopPropagation();
+      clipboardBlocked(e.ctrlKey ? "copy" : e.shiftKey && key === "delete" ? "cut" : "paste");
+      return;
+    }
     if (e.key === "Tab") {
       e.preventDefault();
       const el = e.target;
       const s = el.selectionStart, end = el.selectionEnd;
       const next = code.substring(0, s) + "    " + code.substring(end);
       setCode(next);
+      setQuestionCode(questions[currentIndex].id, currentLang, next);
       requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = s + 4; });
     }
   }
 
   function submitExam(auto) {
-    saveCode();
     setSubmitting(true);
     let totalPassed = 0, totalCases = 0;
+    // Each question is evaluated and sent with ITS OWN code and ITS OWN
+    // language (not whatever language happens to be selected on screen).
+    // Everything is read from the per-question store, so this is correct even
+    // when called from an older render (timer / violation handlers).
     const answers = questions.map((q) => {
-      const res = evaluateQuestion(q, userCodeRef.current[q.id][currentLang], currentLang);
+      const lang = langByQRef.current[q.id] || "javascript";
+      const qCode = (userCodeRef.current[q.id] && userCodeRef.current[q.id][lang]) || "";
+      const res = evaluateQuestion(q, qCode, lang);
       totalPassed += res.passed;
       totalCases += res.total;
-      return { title: q.title, code: userCodeRef.current[q.id][currentLang], language: currentLang, passed: res.passed, total: res.total };
+      return { questionId: q.id, title: q.title, code: qCode, language: lang, passed: res.passed, total: res.total };
     });
 
     ExamAPI.submitSecondLevel({ answers, totalScore: totalPassed })
       .then(() => {
+        clearDrafts(draftOwnerRef.current);
         setResultLine(auto ? "Auto-submitted due to time limits." : "Your code has been uploaded to the admin dashboard.");
         setResultScore({ passed: totalPassed, total: totalCases });
         setPhase("result");
@@ -407,7 +535,7 @@ export default function SecondLevelExam() {
               {questions.map((qq, idx) => (
                 <div
                   key={qq.id}
-                  onClick={() => { saveCode(); loadQuestionInto(idx, currentLang); }}
+                  onClick={() => loadQuestionInto(idx)}
                   className="d-flex align-items-center justify-content-between"
                   style={{
                     background: idx === currentIndex ? "#0d6efd" : "#f8fafc",
@@ -474,11 +602,26 @@ export default function SecondLevelExam() {
                   </div>
                 </div>
 
+                {clipMsg && (
+                  <div className="text-danger fw-bold mb-1" style={{ fontSize: "0.78rem" }}>
+                    <i className="fa-solid fa-ban me-1"></i>{clipMsg}
+                  </div>
+                )}
                 <textarea
+                  key={`${q.id}:${currentLang}`}
                   spellCheck={false}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
+                  onChange={handleEditorChange}
                   onKeyDown={handleEditorKeyDown}
+                  onCopy={blockClipboardEvent("copy")}
+                  onCut={blockClipboardEvent("cut")}
+                  onPaste={blockClipboardEvent("paste")}
+                  onContextMenu={blockClipboardEvent("open the right-click menu")}
+                  onDrop={blockClipboardEvent("drop text")}
+                  onDragStart={(e) => e.preventDefault()}
                   style={{
                     flex: 1, width: "100%", background: "#1e1e2e", color: "#e6e6f0", fontFamily: "Consolas, monospace",
                     fontSize: "0.9rem", borderRadius: 8, border: "none", padding: 16, resize: "none", tabSize: 4, marginBottom: 12, outline: "none"

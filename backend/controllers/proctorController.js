@@ -4,8 +4,16 @@ const ProctorLog = require('../models/ProctorLog');
 exports.createLog = async (req, res) => {
   try {
     const { type, detail, page } = req.body;
-    if (!type) return res.status(400).json({ message: 'type is required.' });
-    const log = await ProctorLog.create({ student: req.student.id, type, detail, page });
+    if (!type || typeof type !== 'string') return res.status(400).json({ message: 'type is required.' });
+    // Identity and time come from the server (token / clock), never from the
+    // browser; the free-text fields are length-limited so the log cannot be
+    // flooded with junk.
+    const log = await ProctorLog.create({
+      student: req.student.id,
+      type: type.slice(0, 60),
+      detail: typeof detail === 'string' ? detail.slice(0, 500) : '',
+      page: typeof page === 'string' ? page.slice(0, 80) : ''
+    });
     res.status(201).json(log);
   } catch (err) {
     res.status(500).json({ message: 'Could not save proctor log.' });

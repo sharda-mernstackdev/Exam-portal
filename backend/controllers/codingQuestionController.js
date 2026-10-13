@@ -19,6 +19,12 @@ exports.listActiveCodingQuestions = async (req, res) => {
   if (isMobileRequest(req)) {
     return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
   }
+  res.json(await getActiveCodingQuestions());
+};
+
+// The Round 2 paper currently in force (see the comment above). Shared with
+// Round 2 submission checking so both agree on which questions are valid.
+async function getActiveCodingQuestions() {
   const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
   const filter = { active: true };
   if (currentExam) {
@@ -29,9 +35,9 @@ exports.listActiveCodingQuestions = async (req, res) => {
       : (currentExam.difficulty ? [currentExam.difficulty] : []);
     if (levels.length) filter.difficulty = { $in: levels };
   }
-  const questions = await CodingQuestion.find(filter).sort({ createdAt: 1 });
-  res.json(questions);
-};
+  return CodingQuestion.find(filter).sort({ createdAt: 1 });
+}
+exports.getActiveCodingQuestions = getActiveCodingQuestions;
 
 exports.listAllCodingQuestions = async (req, res) => {
   const questions = await CodingQuestion.find().sort({ createdAt: 1 });

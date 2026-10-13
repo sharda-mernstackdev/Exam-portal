@@ -565,10 +565,97 @@ export function useProctor(active, options) {
     window.addEventListener("blur", onBlur);
     window.addEventListener("pagehide", onPageHide);
 
+    // ---- Browser-extension / page-tampering watch (best effort) ----
+    // A normal web page can NOT list or block the browser's extensions; these
+    // checks only notice the common side effects of extensions that inject
+    // scripts / UI into the exam page or wrap browser functions (answer
+    // helpers, AI overlays, grammar tools, virtual-camera spoofers). Each
+    // signal is logged ONCE per page through the same proctor log (silently,
+    // no on-screen message) and never ends the exam by itself. The server does
+    // not rely on any of this: scoring and identity are verified server-side.
+    const quietFlash = () => {};
+    const extReported = new Set();
+    function extReport(key, detail) {
+      if (stoppedRef.current || extReported.has(key)) return;
+      extReported.add(key);
+      logEvent("extension_" + key, detail, quietFlash);
+    }
+    const EXT_URL_RE = /^(chrome|moz|edge|safari-web)-extension:\/\//i;
+    const EXT_ATTR_RE = /^data-(gr-|new-gr-|lt-|darkreader|lastpass|grammarly|honey|ext-)/i;
+    function inspectNode(el) {
+      if (!el || el.nodeType !== 1) return;
+      if (boxRef.current && (el === boxRef.current || boxRef.current.contains(el))) return;
+      const tag = (el.tagName || "").toLowerCase();
+      const url = el.getAttribute && (el.getAttribute("src") || el.getAttribute("href") || "");
+      if (url && EXT_URL_RE.test(url)) {
+        extReport("injected_resource", "Page received a resource from a browser extension (<" + tag + ">)");
+        return;
+      }
+      if (tag.indexOf("-") > 0) {
+        extReport("custom_element", "Unknown custom element added to the exam page: <" + tag + ">");
+        return;
+      }
+      if (tag === "script" && !el.getAttribute("src")) {
+        extReport("inline_script", "A script was injected into the exam page after it loaded");
+        return;
+      }
+      if (tag === "iframe" && el.getAttribute("src") && !/^about:|^$/.test(el.getAttribute("src")) &&
+          el.getAttribute("src").indexOf(location.origin) !== 0) {
+        extReport("injected_iframe", "A foreign iframe was added to the exam page");
+      }
+    }
+    function nativeLooking(fn) {
+      try {
+        return Function.prototype.toString.call(fn).indexOf("[native code]") !== -1;
+      } catch (e) {
+        return true;
+      }
+    }
+    function scanOnce() {
+      [document.documentElement, document.body].forEach((root) => {
+        if (!root || !root.attributes) return;
+        for (let i = 0; i < root.attributes.length; i++) {
+          if (EXT_ATTR_RE.test(root.attributes[i].name)) {
+            extReport("page_marker", "Extension marker found on the page (" + root.attributes[i].name + ")");
+          }
+        }
+      });
+      if (document.querySelector("style.darkreader, [class*='grammarly'], grammarly-desktop-integration")) {
+        extReport("ui_overlay", "An extension is changing the exam page's appearance");
+      }
+      if (typeof window.fetch === "function" && !nativeLooking(window.fetch)) {
+        extReport("fetch_hooked", "Network function fetch() has been replaced on the exam page");
+      }
+      if (window.XMLHttpRequest && !nativeLooking(window.XMLHttpRequest.prototype.send)) {
+        extReport("xhr_hooked", "Network function XMLHttpRequest.send has been replaced on the exam page");
+      }
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !nativeLooking(navigator.mediaDevices.getUserMedia)) {
+        extReport("camera_api_hooked", "Camera access function has been replaced (possible virtual camera / spoofing)");
+      }
+    }
+    let extObserver = null;
+    try {
+      extObserver = new MutationObserver((muts) => {
+        muts.forEach((m) => {
+          m.addedNodes.forEach((n) => {
+            inspectNode(n);
+            if (n.nodeType === 1 && n.querySelectorAll) {
+              n.querySelectorAll("script,iframe,[src],[href]").forEach(inspectNode);
+            }
+          });
+        });
+      });
+      extObserver.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) { /* ignore */ }
+    scanOnce();
+    const extTimer = setInterval(scanOnce, 5000);
+
     start();
 
     return () => {
       stoppedRef.current = true;
+      clearInterval(extTimer);
+      if (extObserver) extObserver.disconnect();
       clearInterval(timerRef.current);
       clearTimeout(flashTimeoutRef.current);
       clearTimeout(overlayTimeoutRef.current);

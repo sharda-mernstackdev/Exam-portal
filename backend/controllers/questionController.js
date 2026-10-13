@@ -186,11 +186,21 @@ exports.listActiveQuestions = async (req, res) => {
     }
   }
 
+  const visible = await getVisibleQuestions();
+  // The answer key never leaves the server: scoring happens in
+  // controllers/submissionController.js from the database, so a browser
+  // extension / DevTools cannot read the correct answers from this response.
+  res.json(prepareForStudent(visible, studentIdForCheck).map(stripAnswerKey));
+};
+
+// The questions a candidate is allowed to see right now (active Test, or the
+// original "all active sections" behaviour). Shared by the paper endpoint and
+// by submission scoring, so both always agree on what the paper was.
+async function getVisibleQuestions() {
   const questions = await Question.find({ active: true }).sort({ createdAt: 1 });
   const exams = await Exam.find({}, 'title active sectionIds');
 
   const activeTest = await findActiveTest();
-  const studentId = req.student && req.student.id;
 
   if (activeTest) {
     // A named Test is active — only show categories belonging to its
@@ -198,8 +208,7 @@ exports.listActiveQuestions = async (req, res) => {
     const allowedCategories = new Set(
       activeTest.sectionIds.map((s) => s.title.trim().toLowerCase())
     );
-    const visible = questions.filter((q) => allowedCategories.has((q.category || '').trim().toLowerCase()));
-    return res.json(prepareForStudent(visible, studentId));
+    return questions.filter((q) => allowedCategories.has((q.category || '').trim().toLowerCase()));
   }
 
   // No Test configured — original behaviour: only exclude a question if its
@@ -211,10 +220,17 @@ exports.listActiveQuestions = async (req, res) => {
   const inactiveCategories = new Set(
     exams.filter((e) => !e.active && (!e.sectionIds || e.sectionIds.length === 0)).map((e) => e.title.trim().toLowerCase())
   );
-  const visible = questions.filter((q) => !inactiveCategories.has((q.category || '').trim().toLowerCase()));
+  return questions.filter((q) => !inactiveCategories.has((q.category || '').trim().toLowerCase()));
+}
 
-  res.json(prepareForStudent(visible, studentId));
-};
+function stripAnswerKey(q) {
+  const copy = { ...q };
+  delete copy.correctOption;
+  return copy;
+}
+
+exports.getVisibleQuestions = getVisibleQuestions;
+exports.shuffleOptions = shuffleOptions;
 
 // GET /api/admin/questions — full bank for the admin question-bank UI
 exports.listAllQuestions = async (req, res) => {

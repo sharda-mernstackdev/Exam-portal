@@ -102,18 +102,49 @@ export default function SecondLevelExam() {
   const [phase, setPhase] = useState("loading"); // loading | start | exam | result
   const violationCountRef = useRef(0);
 
-  function handleLockdownViolation() {
-    if (phase !== "exam") return; // don't penalize leaving fullscreen before the exam actually starts
+  // The fullscreen listener inside useExamGuard is registered once, so it would
+  // keep calling the FIRST render's handler (phase still "loading") and every
+  // exit from fullscreen (the browser's cross/X button, Esc...) was silently
+  // ignored. These refs always hold the latest values, and the guard is given a
+  // small wrapper that calls the latest handler.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const questionsRef = useRef(null);
+  const submittedRef = useRef(false);
+  const lastViolationAtRef = useRef(0);
+  const lockdownHandlerRef = useRef(null);
+
+  function handleLockdownViolation(kind) {
+    if (phaseRef.current !== "exam") return; // don't penalize before the exam starts
+    if (submittedRef.current) return;
+    // One qualifying action = one violation (several events can fire for it).
+    const now = Date.now();
+    if (now - lastViolationAtRef.current < 1500) return;
+    lastViolationAtRef.current = now;
+
     violationCountRef.current++;
-    if (violationCountRef.current >= 2) {
+    const n = violationCountRef.current;
+    const what = kind === "tab" ? "Switched tab/window" : "Exited fullscreen (cross/X button or Esc)";
+    try {
+      ExamAPI.logProctorEvent({
+        type: kind === "tab" ? "round2_tab_switch" : "round2_fullscreen_exit",
+        detail: `Round 2 violation ${n}/2: ${what}`,
+        page: location.pathname,
+      }).catch(() => {});
+    } catch (e) { /* ignore */ }
+
+    if (n >= 2) {
       alert("VIOLATION LIMIT EXCEEDED: Auto-submitting your Round 2 attempt!");
-      submitExam(true);
+      submitExam(true, "violation");
     } else {
-      alert(`WARNING (${violationCountRef.current}/2): Leaving fullscreen or switching windows is forbidden!`);
+      alert(`WARNING (${n}/2): Leaving fullscreen or switching windows is forbidden!`);
     }
   }
+  lockdownHandlerRef.current = handleLockdownViolation;
 
-  const { fullscreen, enter } = useExamGuard(true, handleLockdownViolation);
+  const { fullscreen, enter } = useExamGuard(true, () => {
+    if (lockdownHandlerRef.current) lockdownHandlerRef.current("fullscreen");
+  });
 
   const [candidateName, setCandidateName] = useState("");
   const [questions, setQuestions] = useState(null);
@@ -121,6 +152,16 @@ export default function SecondLevelExam() {
   const [currentLang, setCurrentLang] = useState("javascript");
   const [code, setCode] = useState("");
   const [timeLeft, setTimeLeft] = useState(EXAM_DURATION_MIN * 60);
+  // Campus Mode: the SERVER fixes the deadline (when Begin is pressed) and keeps
+  // the latest auto-saved code; this page only counts down to that deadline.
+  // Online mode keeps the original local timer.
+  const [campus, setCampus] = useState(false);
+  const [durationMin, setDurationMin] = useState(EXAM_DURATION_MIN);
+  const deadlineRef = useRef(null);   // server deadline (ms, server clock)
+  const offsetRef = useRef(0);        // server clock minus this computer's clock
+  const beginBusyRef = useRef(false);
+  const draftBusyRef = useRef(false);
+  const lastSavedRef = useRef("");
   const [resultLine, setResultLine] = useState("");
   const [resultScore, setResultScore] = useState({ passed: 0, total: 0 });
   const [submitting, setSubmitting] = useState(false);
@@ -208,7 +249,7 @@ export default function SecondLevelExam() {
     if (phase !== "exam") return undefined;
     function onVisibility() {
       if (document.hidden && localStorage.getItem("examStatus") === "locked") {
-        handleLockdownViolation();
+        handleLockdownViolation("tab");
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -259,11 +300,17 @@ export default function SecondLevelExam() {
           langByQRef.current[q.id] = ["javascript", "python", "cpp"].includes(savedLang) ? savedLang : "javascript";
           questionStatusRef.current[q.id] = "not-attempted";
         });
+        questionsRef.current = qs;
         setQuestions(qs);
         setCurrentIndex(0);
         setCurrentLang(langByQRef.current[qs[0].id]);
         setCode(userCodeRef.current[qs[0].id][langByQRef.current[qs[0].id]]);
-        setPhase("start");
+        // Which mode / duration applies (and the deadline, if this exam was
+        // already started and the page was refreshed). Not fatal if it fails.
+        return ExamAPI.getSecondLevelStatus()
+          .then(applyTiming)
+          .catch(() => { /* keep the default local timer */ })
+          .then(() => setPhase("start"));
       })
       .catch((err) => {
         if (err.message === "round1 not passed") return;
@@ -297,22 +344,124 @@ export default function SecondLevelExam() {
     setCode(userCodeRef.current[target.id][lang]);
   }
 
-  function handleBegin() {
-    if (mobileDevice || camStatus !== "ok") return;
-    setPhase("exam");
+  // Reads the server's timer information (see GET /second-level/status).
+  function applyTiming(t) {
+    if (!t) return;
+    setCampus(!!t.campus);
+    if (!t.campus) return;
+    setDurationMin(Number(t.durationMinutes) || EXAM_DURATION_MIN);
+    if (t.started && t.deadlineAt) {
+      offsetRef.current = Date.parse(t.serverTime) - Date.now();
+      deadlineRef.current = Date.parse(t.deadlineAt);
+      setTimeLeft(Math.max(0, Number(t.remainingSeconds) || 0));
+    } else {
+      setTimeLeft((Number(t.durationMinutes) || EXAM_DURATION_MIN) * 60);
+    }
   }
 
-  // Timer
+  // The server marks the start time (once). Pressing Begin again after a
+  // refresh gets the SAME deadline back, so the clock cannot be restarted.
+  function handleBegin() {
+    if (mobileDevice || camStatus !== "ok" || beginBusyRef.current) return;
+    beginBusyRef.current = true;
+    ExamAPI.startSecondLevel()
+      .then((t) => {
+        applyTiming(t);
+        setPhase("exam");
+      })
+      .catch((err) => {
+        if (err.status === 401 || err.status === 409) {
+          clearDrafts(draftOwnerRef.current);
+          localStorage.removeItem("examStatus");
+          localStorage.removeItem("studentToken");
+          alert(err.message || "Your session has ended.");
+          navigate("/login", { replace: true });
+          return;
+        }
+        alert(err.message || "Could not start the exam. Please check your connection and try again.");
+      })
+      .finally(() => { beginBusyRef.current = false; });
+  }
+
+  // The server has already finalized this attempt (time expired / already
+  // submitted): show the result screen instead of letting the candidate
+  // continue. Safe to call more than once.
+  function showServerFinalized(data) {
+    if (submittedRef.current && phaseRef.current === "result") return;
+    submittedRef.current = true;
+    clearDrafts(draftOwnerRef.current);
+    setResultLine(
+      data && data.autoSubmitted
+        ? "Time is up! Your exam time has expired and your exam was submitted automatically."
+        : (data && data.message) || "Your Round 2 exam has been submitted."
+    );
+    setResultScore(null);
+    setSubmitting(false);
+    setPhase("result");
+  }
+
+  // Timer - Online mode: the original local countdown.
   useEffect(() => {
-    if (phase !== "exam") return undefined;
-    if (timeLeft <= 0) {
-      submitExam(true);
-      return undefined;
-    }
+    if (phase !== "exam" || campus || timeLeft <= 0) return undefined;
     const id = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
     return () => clearTimeout(id);
+  }, [phase, timeLeft, campus]);
+
+  // Timer - Campus mode: counts down to the SERVER's deadline, using the
+  // server's clock, so refreshing the page or changing this computer's clock
+  // does not change the time left.
+  useEffect(() => {
+    if (phase !== "exam" || !campus) return undefined;
+    function tick() {
+      if (!deadlineRef.current) return;
+      const rem = Math.max(0, Math.ceil((deadlineRef.current - (Date.now() + offsetRef.current)) / 1000));
+      setTimeLeft(rem);
+    }
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [phase, campus]);
+
+  // Time is up -> submit automatically. submitExam can only run once (see
+  // submittedRef), however many times this effect fires.
+  useEffect(() => {
+    if (phase === "exam" && timeLeft <= 0) submitExam(true, "time");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, timeLeft]);
+
+  // Campus mode: every 10 s send the server the current code of every
+  // question (each with its own language). If the browser dies before the
+  // deadline, the server finalizes the exam from the latest copy it received.
+  useEffect(() => {
+    if (phase !== "exam" || !campus) return undefined;
+    function save() {
+      if (submittedRef.current || draftBusyRef.current || !questionsRef.current) return;
+      const answers = questionsRef.current.map((qq) => {
+        const lang = langByQRef.current[qq.id] || "javascript";
+        const last = lastRunRef.current[qq.id];
+        return {
+          questionId: qq.id,
+          language: lang,
+          code: (userCodeRef.current[qq.id] && userCodeRef.current[qq.id][lang]) || "",
+          passed: last ? last.passed : 0
+        };
+      });
+      const snap = JSON.stringify(answers);
+      if (snap === lastSavedRef.current) return;
+      draftBusyRef.current = true;
+      ExamAPI.saveSecondLevelDraft({ answers })
+        .then(() => { lastSavedRef.current = snap; })
+        .catch((err) => {
+          if (err.status === 409 && err.data && err.data.completed) showServerFinalized(err.data);
+          // other errors (network): the next tick tries again
+        })
+        .finally(() => { draftBusyRef.current = false; });
+    }
+    save();
+    const id = setInterval(save, 10000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, campus]);
 
   function handleLangChange(lang) {
     const cur = questions[currentIndex];
@@ -321,7 +470,11 @@ export default function SecondLevelExam() {
     setCode(userCodeRef.current[cur.id][lang]);
   }
 
+  // Once time is up (or the exam is being submitted) nothing can be changed.
+  const locked = submitting || (phase === "exam" && timeLeft <= 0);
+
   function handleRun() {
+    if (locked) return;
     const q = questions[currentIndex];
     const evalResult = evaluateQuestion(q, userCodeRef.current[q.id][currentLang], currentLang);
     lastRunRef.current[q.id] = evalResult;
@@ -330,6 +483,7 @@ export default function SecondLevelExam() {
   }
 
   function handleReset() {
+    if (locked) return;
     const q = questions[currentIndex];
     if (!window.confirm("Reset code to starter template for this language?")) return;
     const starter = (q.starterCode && q.starterCode[currentLang]) || "";
@@ -377,6 +531,7 @@ export default function SecondLevelExam() {
   }
 
   function handleEditorChange(e) {
+    if (locked) return;
     // A paste / drop / cut that slipped past the handlers above shows up here
     // as an input event of that type: ignore it (the controlled textarea
     // then keeps its previous text).
@@ -390,6 +545,7 @@ export default function SecondLevelExam() {
   }
 
   function handleEditorKeyDown(e) {
+    if (locked) return;
     const key = (e.key || "").toLowerCase();
     const mod = e.ctrlKey || e.metaKey; // Ctrl on Windows/Linux, Cmd on macOS
     if (mod && !e.altKey && (key === "c" || key === "v" || key === "x")) {
@@ -416,14 +572,17 @@ export default function SecondLevelExam() {
     }
   }
 
-  function submitExam(auto) {
+  function submitExam(auto, reason) {
+    const qs = questionsRef.current || questions;
+    if (!qs || submittedRef.current) return;
+    submittedRef.current = true;
     setSubmitting(true);
     let totalPassed = 0, totalCases = 0;
     // Each question is evaluated and sent with ITS OWN code and ITS OWN
     // language (not whatever language happens to be selected on screen).
     // Everything is read from the per-question store, so this is correct even
     // when called from an older render (timer / violation handlers).
-    const answers = questions.map((q) => {
+    const answers = qs.map((q) => {
       const lang = langByQRef.current[q.id] || "javascript";
       const qCode = (userCodeRef.current[q.id] && userCodeRef.current[q.id][lang]) || "";
       const res = evaluateQuestion(q, qCode, lang);
@@ -432,14 +591,39 @@ export default function SecondLevelExam() {
       return { questionId: q.id, title: q.title, code: qCode, language: lang, passed: res.passed, total: res.total };
     });
 
-    ExamAPI.submitSecondLevel({ answers, totalScore: totalPassed })
+    ExamAPI.submitSecondLevel({ answers, totalScore: totalPassed, auto: !!auto, reason: reason || "" })
       .then(() => {
         clearDrafts(draftOwnerRef.current);
-        setResultLine(auto ? "Auto-submitted due to time limits." : "Your code has been uploaded to the admin dashboard.");
+        setResultLine(
+          reason === "time"
+            ? "Time is up! Your exam time has expired and your exam was submitted automatically."
+            : auto
+              ? "Your exam was submitted automatically because of rule violations."
+              : "Your code has been uploaded to the admin dashboard."
+        );
         setResultScore({ passed: totalPassed, total: totalCases });
         setPhase("result");
       })
       .catch((err) => {
+        submittedRef.current = false;
+        // 409 = the exam is already finalized (the server closed it at the
+        // deadline, or another request submitted first): show that, don't retry.
+        if (err.status === 409) {
+          showServerFinalized({ ...(err.data || {}), autoSubmitted: (err.data && err.data.autoSubmitted) || reason === "time" });
+          return;
+        }
+        if (err.status === 401) {
+          setSubmitting(false);
+          alert(err.message || "Your session has ended. Please log in again.");
+          return;
+        }
+        // Network problem. When the time is up the exam must still be handed
+        // in, so keep retrying every 3 s (the server also closes the exam
+        // itself shortly after the deadline, from the code it already has).
+        if (reason === "time") {
+          setTimeout(() => submitExam(true, "time"), 3000);
+          return;
+        }
         setSubmitting(false);
         alert(err.message || "Could not submit your Round 2 attempt. Please check your connection and try again.");
       });
@@ -465,6 +649,16 @@ export default function SecondLevelExam() {
 
   return (
     <div style={{ background: "#f4f6f9", fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif", userSelect: "none", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {phase === "exam" && timeLeft <= 0 && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 100000, background: "rgba(15,23,42,0.88)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div className="bg-white text-center" style={{ borderRadius: 12, padding: 32, maxWidth: 460, width: "100%" }}>
+            <i className="fa-solid fa-hourglass-end fa-3x text-danger mb-3"></i>
+            <h4 className="fw-bold mb-2">Time is up!</h4>
+            <p className="text-muted mb-0">Your exam time has expired. Your exam is being submitted automatically. Please wait and do not close this window.</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="d-flex justify-content-between align-items-center" style={{ background: "#0f172a", color: "#fff", padding: "12px 24px", flexShrink: 0 }}>
         <div className="d-flex align-items-center gap-3">
@@ -477,7 +671,7 @@ export default function SecondLevelExam() {
             <div className="bg-danger text-white px-3 py-1 rounded fw-bold">
               <i className="fa-regular fa-clock me-1"></i> {minutes}:{seconds}
             </div>
-            <button className="btn btn-outline-light btn-sm fw-bold" disabled={submitting} onClick={() => { if (window.confirm("Complete the exam? You cannot modify your code after this.")) submitExam(false); }}>
+            <button className="btn btn-outline-light btn-sm fw-bold" disabled={locked} onClick={() => { if (window.confirm("Complete the exam? You cannot modify your code after this.")) submitExam(false); }}>
               Complete Exam
             </button>
           </div>
@@ -489,13 +683,13 @@ export default function SecondLevelExam() {
           <div className="bg-white text-center" style={{ borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.05)", padding: 40, maxWidth: 500, width: "100%" }}>
             <i className="fa-solid fa-code fa-3x text-primary mb-3"></i>
             <h4 className="fw-bold mb-1">Round 2: Technical & Coding</h4>
-            <p className="text-muted small mb-4">You have <span className="fw-bold">{EXAM_DURATION_MIN}</span> minutes to solve algorithmic problems.</p>
+            <p className="text-muted small mb-4">You have <span className="fw-bold">{campus ? durationMin : EXAM_DURATION_MIN}</span> minutes to solve algorithmic problems.</p>
             <div className="text-start bg-light p-3 rounded mb-4 border">
               <ul className="mb-0 small text-secondary">
                 <li>Select your preferred programming language (JavaScript, Python, C++) from the code editor dropdown.</li>
                 <li>Use <strong>Run Code</strong> to execute your solution against visible and hidden test cases.</li>
                 <li>Your code must return the specified output format exactly.</li>
-                <li>The exam will auto-submit when the timer expires.</li>
+                <li>The exam will auto-submit when the timer expires{campus ? " (the time is kept by the server, so refreshing the page does not restart it)" : ""}.</li>
                 <li>Your camera and microphone stay on during the exam. If background voice or movement in the camera is detected, a red warning appears under your camera box. Please sit alone in a quiet place.</li>
                 <li>Do not leave fullscreen or switch tabs/windows — a second violation auto-submits your attempt.</li>
               </ul>
@@ -593,10 +787,10 @@ export default function SecondLevelExam() {
                     <option value="cpp">C++ 17</option>
                   </select>
                   <div>
-                    <button className="btn btn-sm btn-outline-secondary fw-bold me-2" onClick={handleReset}>
+                    <button className="btn btn-sm btn-outline-secondary fw-bold me-2" disabled={locked} onClick={handleReset}>
                       <i className="fa-solid fa-rotate-left me-1"></i> Reset
                     </button>
-                    <button className="btn btn-sm btn-success fw-bold" onClick={handleRun}>
+                    <button className="btn btn-sm btn-success fw-bold" disabled={locked} onClick={handleRun}>
                       <i className="fa-solid fa-play me-1"></i> Run Code
                     </button>
                   </div>
@@ -614,6 +808,7 @@ export default function SecondLevelExam() {
                   autoCorrect="off"
                   autoCapitalize="off"
                   value={code}
+                  readOnly={locked}
                   onChange={handleEditorChange}
                   onKeyDown={handleEditorKeyDown}
                   onCopy={blockClipboardEvent("copy")}
@@ -686,12 +881,14 @@ export default function SecondLevelExam() {
             <i className="fa-solid fa-check-circle fa-4x text-success mb-3"></i>
             <h3 className="fw-bold mb-1">Assessment Submitted</h3>
             <p className="text-muted mb-4">{resultLine}</p>
-            <div className="bg-light p-4 rounded border mb-4">
-              <h1 className="display-4 fw-bold text-primary mb-0">
-                {resultScore.passed}<span className="fs-4 text-secondary"> / {resultScore.total}</span>
-              </h1>
-              <p className="small text-muted fw-bold text-uppercase mt-2 mb-0">Total Test Cases Passed</p>
-            </div>
+            {resultScore && (
+              <div className="bg-light p-4 rounded border mb-4">
+                <h1 className="display-4 fw-bold text-primary mb-0">
+                  {resultScore.passed}<span className="fs-4 text-secondary"> / {resultScore.total}</span>
+                </h1>
+                <p className="small text-muted fw-bold text-uppercase mt-2 mb-0">Total Test Cases Passed</p>
+              </div>
+            )}
             <button className="btn btn-outline-dark fw-bold px-5" onClick={() => window.close()}>Close Window</button>
           </div>
         </div>

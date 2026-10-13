@@ -16,7 +16,11 @@ const SecondLevelResultSchema = new mongoose.Schema(
       }
     ],
     totalScore: { type: Number, default: 0 },
-    round2Status: { type: String, enum: ['PASS', 'FAIL', 'PENDING'], default: 'PENDING' }
+    round2Status: { type: String, enum: ['PASS', 'FAIL', 'PENDING'], default: 'PENDING' },
+    // '' = the candidate submitted manually. 'time' / 'violation' = the browser
+    // auto-submitted. 'deadline' = the SERVER finalized the exam from the last
+    // auto-saved copy because the deadline passed without a submission.
+    autoSubmitReason: { type: String, default: '' }
   },
   { timestamps: true }
 );

@@ -93,6 +93,10 @@ const ExamAPI = {
   submitExam: (payload) => request("/submissions", { method: "POST", auth: "student", body: payload }),
   myLatestSubmission: () => request("/submissions/mine", { auth: "student" }),
   submitSecondLevel: (payload) => request("/second-level/submissions", { method: "POST", auth: "student", body: payload }),
+  // Round 2 timer (Campus Mode): the server fixes the deadline and keeps the latest saved code.
+  getSecondLevelStatus: () => request("/second-level/status", { auth: "student" }),
+  startSecondLevel: () => request("/second-level/start", { method: "POST", auth: "student" }),
+  saveSecondLevelDraft: (payload) => request("/second-level/draft", { method: "PUT", auth: "student", body: payload }),
   adminGetSubmissions: () => request("/admin/submissions", { auth: "admin" }),
   adminClearSubmissions: () => request("/admin/submissions", { method: "DELETE", auth: "admin" }),
   adminGetSecondLevelResults: () => request("/admin/second-level-results", { auth: "admin" }),

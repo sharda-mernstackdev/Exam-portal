@@ -38,6 +38,22 @@ const StudentSchema = new mongoose.Schema(
     // When the Round 2 invitation becomes due (15 min after Round 1 ends).
     round2EmailDueAt: { type: Date },
     round2Completed: { type: Boolean, default: false },
+    // ---- Round 2 server-side timer (Campus Mode) ----
+    // round2StartedAt is written ONCE, by the server, when the candidate presses
+    // Begin; round2DeadlineAt = start + the exam duration. The server enforces
+    // this deadline itself (see utils/round2Finalize.js), so a closed or
+    // tampered browser cannot extend the exam.
+    round2StartedAt: { type: Date },
+    round2DeadlineAt: { type: Date },
+    // Latest answers/code the server has received while the exam was running
+    // (auto-saved by the browser). If the deadline passes without a normal
+    // submission, the server finalizes the exam from this copy.
+    round2Draft: {
+      savedAt: { type: Date },
+      answers: [
+        { _id: false, questionId: String, code: String, language: String, passed: Number }
+      ]
+    },
     finalEmailSentAt: { type: Date }
   },
   { timestamps: true }

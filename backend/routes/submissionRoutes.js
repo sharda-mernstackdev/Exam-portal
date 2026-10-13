@@ -8,6 +8,9 @@ router.post('/submissions', studentAuth, requireRound(1), ctrl.createSubmission)
 router.get('/submissions/mine', studentAuth, ctrl.myLatestSubmission);
 
 router.post('/second-level/submissions', studentAuth, requireRound2Eligible, secondLevelCtrl.createSecondLevelResult);
+router.get('/second-level/status', studentAuth, requireRound2Eligible, secondLevelCtrl.round2Status);
+router.post('/second-level/start', studentAuth, requireRound2Eligible, secondLevelCtrl.round2Start);
+router.put('/second-level/draft', studentAuth, requireRound2Eligible, secondLevelCtrl.saveSecondLevelDraft);
 
 router.get('/admin/submissions', adminAuth, ctrl.listSubmissions);
 router.delete('/admin/submissions', adminAuth, ctrl.clearSubmissions);

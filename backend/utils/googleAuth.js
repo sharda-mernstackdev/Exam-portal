@@ -30,7 +30,7 @@ function fetchTokenInfo(idToken) {
 
 async function verifyGoogleIdToken(idToken, clientId) {
   if (!idToken || typeof idToken !== 'string') {
-    throw new Error('Please sign in with your Google account to register.');
+    throw new Error('Please sign in with your Google account to continue.');
   }
   const info = await fetchTokenInfo(idToken);
   if (info.aud !== clientId) throw new Error('This Google sign-in is not valid for this portal.');
@@ -38,6 +38,13 @@ async function verifyGoogleIdToken(idToken, clientId) {
   if (!info.email) throw new Error('Google did not return an email address.');
   if (info.exp && Number(info.exp) * 1000 < Date.now()) throw new Error('Google sign-in expired. Please sign in again.');
   return { email: String(info.email).toLowerCase(), name: info.name || '' };
+}
+
+// Make the "email check is OFF" state visible in the server log instead of
+// silent: without GOOGLE_CLIENT_ID the exam links (Round 1 and Round 2) are
+// not tied to the registered email's Google account.
+if (!(process.env.GOOGLE_CLIENT_ID || '').trim()) {
+  console.warn('[security] GOOGLE_CLIENT_ID is not set - exam links (Round 1 and Round 2) are NOT tied to the registered email. Set it in backend .env and VITE_GOOGLE_CLIENT_ID in the frontend.');
 }
 
 module.exports = { verifyGoogleIdToken };

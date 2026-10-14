@@ -4,7 +4,7 @@ import { useExamGuard } from "../hooks/useExamGuard";
 import FullscreenGate from "../components/FullscreenGate";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
-import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
+import GoogleVerify from "../components/GoogleVerify";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -36,7 +36,7 @@ export default function Round2Login() {
   const autoTriedRef = useRef(false);
   const [googleToken, setGoogleToken] = useState("");
   const [googleReset, setGoogleReset] = useState(0);
-  const needGoogle = !!GOOGLE_CLIENT_ID;
+  const needGoogle = true; // the Google email check is always required
 
   const [forceManual, setForceManual] = useState(false);
   const prefilledFromLink = !!(searchParams.get("email") && searchParams.get("code")) && !forceManual;

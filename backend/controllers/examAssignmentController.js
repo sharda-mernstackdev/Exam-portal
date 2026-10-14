@@ -7,7 +7,7 @@ const { sendExamInvitationEmail } = require('../utils/mailer');
 const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { lateLoginDeadline } = require('../utils/examWindow');
-const { verifyGoogleIdToken } = require('../utils/googleAuth');
+const { verifyGoogleIdToken, requireRegisteredGoogleEmail } = require('../utils/googleAuth');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -247,20 +247,9 @@ exports.verifyExamAccess = async (req, res) => {
     // So opening it is not enough: the person must also be signed in to the
     // Google account of the REGISTERED email. The email comes from Google's
     // verified token, never from the link or the form.
-    const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
-    if (googleClientId) {
-      try {
-        const g = await verifyGoogleIdToken(req.body.googleToken, googleClientId);
-        if (g.email !== student.email.toLowerCase()) {
-          return res.status(403).json({
-            googleError: true,
-            message: `This exam link was sent to ${student.email}. You are signed in as ${g.email}. Please open the link in Chrome signed in with ${student.email}.`
-          });
-        }
-      } catch (gErr) {
-        return res.status(403).json({ googleError: true, message: gErr.message });
-      }
-    }
+    // HARD check: always required, and refused when it is not configured.
+    const emailCheck = await requireRegisteredGoogleEmail(req.body.googleToken, student.email, 'exam');
+    if (emailCheck) return res.status(emailCheck.status).json(emailCheck.body);
 
     if (assignment.status === 'Completed') {
       return res.status(409).json({ message: 'You have already completed this exam.' });

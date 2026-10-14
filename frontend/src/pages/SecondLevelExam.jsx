@@ -177,6 +177,7 @@ export default function SecondLevelExam() {
   const [resultScore, setResultScore] = useState({ passed: 0, total: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [clipMsg, setClipMsg] = useState("");
+  const [resetAsk, setResetAsk] = useState(null); // { qid, lang } while "Reset?" is shown
   const clipMsgTimerRef = useRef(null);
   const lastClipLogRef = useRef(0);
 
@@ -519,10 +520,21 @@ export default function SecondLevelExam() {
     rerender();
   }
 
+  // Reset asks "are you sure?" INSIDE the page. It must not use window.confirm():
+  // a browser dialog takes the window's focus and drops fullscreen, which was
+  // counted as a violation. `resetAsk` remembers which question + language the
+  // question was asked for, so a confirm can never reset a different one.
   function handleReset() {
     if (locked) return;
     const q = questions[currentIndex];
-    if (!window.confirm("Reset code to starter template for this language?")) return;
+    setResetAsk({ qid: q.id, lang: currentLang });
+  }
+  function confirmReset() {
+    const ask = resetAsk;
+    setResetAsk(null);
+    if (locked || !ask) return;
+    const q = questions[currentIndex];
+    if (!q || q.id !== ask.qid || currentLang !== ask.lang) return;
     const starter = (q.starterCode && q.starterCode[currentLang]) || "";
     setQuestionCode(q.id, currentLang, starter);
     setCode(starter);
@@ -836,6 +848,13 @@ export default function SecondLevelExam() {
                     <option value="python">Python 3.10</option>
                     <option value="cpp">C++ 17</option>
                   </select>
+                  {resetAsk && resetAsk.qid === q.id && resetAsk.lang === currentLang && !locked ? (
+                    <div className="d-flex align-items-center">
+                      <span className="fw-bold me-2" style={{ fontSize: "0.8rem" }}>Reset to starter code?</span>
+                      <button type="button" className="btn btn-sm btn-danger fw-bold me-2" onClick={confirmReset}>Yes, reset</button>
+                      <button type="button" className="btn btn-sm btn-outline-secondary fw-bold" onClick={() => setResetAsk(null)}>Cancel</button>
+                    </div>
+                  ) : (
                   <div>
                     <button className="btn btn-sm btn-outline-secondary fw-bold me-2" disabled={locked} onClick={handleReset}>
                       <i className="fa-solid fa-rotate-left me-1"></i> Reset
@@ -844,6 +863,7 @@ export default function SecondLevelExam() {
                       <i className="fa-solid fa-play me-1"></i> Run Code
                     </button>
                   </div>
+                  )}
                 </div>
 
                 {clipMsg && (

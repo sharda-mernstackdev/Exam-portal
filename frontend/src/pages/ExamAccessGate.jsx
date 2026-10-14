@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
-import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
+import GoogleVerify from "../components/GoogleVerify";
 
 function formatDate(d) {
   if (!d) return "-";
@@ -43,7 +43,7 @@ export default function ExamAccessGate() {
   const [accessError, setAccessError] = useState("");
   const [googleToken, setGoogleToken] = useState("");
   const [googleReset, setGoogleReset] = useState(0);
-  const needGoogle = !!GOOGLE_CLIENT_ID;
+  const needGoogle = true; // the Google email check is always required
 
   useEffect(() => {
     ExamAPI.getPublicExamInfo(examId)

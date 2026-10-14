@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 // Google Sign-In used to prove that the person opening an exam link owns the
 // email the link was sent to. VITE_GOOGLE_CLIENT_ID must be set (same value
-// as on the registration page). When it is empty nothing is shown and the
-// caller treats Google verification as not required.
+// as on the registration page). It is REQUIRED for the exam links: when it is
+// empty an error is shown and the exam cannot be opened.
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 
 function decodeJwtPayload(token) {
@@ -86,7 +86,15 @@ export default function GoogleVerify({ expectedEmail, onVerified, resetKey }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expected, resetKey]);
 
-  if (!GOOGLE_CLIENT_ID) return null;
+  // Not configured: the exam must NOT open without the email check, so say so
+  // clearly (the server refuses the sign-in as well).
+  if (!GOOGLE_CLIENT_ID) {
+    return (
+      <div className="alert alert-danger small text-start mb-3">
+        <b>Exam sign-in is unavailable.</b> Email verification is not set up for this portal. Please contact the administrator.
+      </div>
+    );
+  }
 
   return (
     <div className="mb-3 text-center">

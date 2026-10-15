@@ -10,11 +10,13 @@ import AdminDashboard from "./pages/AdminDashboard";
 import StudentRegister from "./pages/StudentRegister";
 import ExamAccessGate from "./pages/ExamAccessGate";
 import RegisterRedirect from "./pages/RegisterRedirect";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<RegisterRedirect />} />
+      <Route path="/privacy-policy" element={<PrivacyPolicy />} />
       <Route path="/login" element={<Login />} />
       <Route path="/admin-login" element={<AdminLogin />} />
       <Route path="/round2-login" element={<Round2Login />} />

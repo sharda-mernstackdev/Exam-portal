@@ -43,7 +43,6 @@ export default function ExamAccessGate() {
   const [accessError, setAccessError] = useState("");
   const [googleToken, setGoogleToken] = useState("");
   const [googleReset, setGoogleReset] = useState(0);
-  const needGoogle = true; // the Google email check is always required
 
   useEffect(() => {
     ExamAPI.getPublicExamInfo(examId)
@@ -129,30 +128,48 @@ export default function ExamAccessGate() {
         </div>
 
         <div style={{ padding: 30 }}>
-          <table className="table table-borderless small mb-4">
-            <tbody>
-              <tr><td className="text-secondary">Email</td><td className="text-end fw-bold">{email || "-"}</td></tr>
-              <tr><td className="text-secondary">Access code</td><td className="text-end fw-bold" style={{ letterSpacing: 1 }}>{code || "-"}</td></tr>
-              <tr><td className="text-secondary">Exam date</td><td className="text-end">{formatDate(exam.examDate)}</td></tr>
-              <tr><td className="text-secondary">Exam time</td><td className="text-end">{formatTime(exam.startTime)} – {formatTime(exam.endTime)}</td></tr>
-            </tbody>
-          </table>
-
           {accessError && (
             <div className="alert alert-danger small">{accessError}</div>
           )}
 
-          {needGoogle && (
-            <GoogleVerify expectedEmail={email} resetKey={googleReset} onVerified={setGoogleToken} />
-          )}
+          {!googleToken ? (
+            <>
+              {/* Step 1: sign in with the Google account of the registered email.
+                  Nothing about the exam is started until this matches. */}
+              <h5 className="fw-bold mb-2">Sign in to open your exam</h5>
+              <p className="text-secondary small mb-3">
+                Sign in with the Google account of the email this exam link was sent to
+                {email ? <> (<b>{email}</b>)</> : null}. If you choose any other account, the exam will not start.
+              </p>
+              <GoogleVerify expectedEmail={email} resetKey={googleReset} onVerified={setGoogleToken} />
+              <div className="text-center small text-muted mt-3">
+                Only the registered candidate can open this exam.
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Step 2: verified, so the exam details and Start button appear. */}
+              <div className="text-success small fw-bold text-center mb-3">
+                <i className="fa-solid fa-circle-check me-1"></i>Verified with Google: {email}
+              </div>
+              <table className="table table-borderless small mb-4">
+                <tbody>
+                  <tr><td className="text-secondary">Email</td><td className="text-end fw-bold">{email || "-"}</td></tr>
+                  <tr><td className="text-secondary">Access code</td><td className="text-end fw-bold" style={{ letterSpacing: 1 }}>{code || "-"}</td></tr>
+                  <tr><td className="text-secondary">Exam date</td><td className="text-end">{formatDate(exam.examDate)}</td></tr>
+                  <tr><td className="text-secondary">Exam time</td><td className="text-end">{formatTime(exam.startTime)} – {formatTime(exam.endTime)}</td></tr>
+                </tbody>
+              </table>
 
-          <button type="button" disabled={starting || (needGoogle && !googleToken)} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
-            {starting ? (
-              <><i className="fa-solid fa-spinner fa-spin me-2"></i>Verifying...</>
-            ) : (
-              <><i className="fa-solid fa-right-to-bracket me-2"></i>Start Exam</>
-            )}
-          </button>
+              <button type="button" disabled={starting} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
+                {starting ? (
+                  <><i className="fa-solid fa-spinner fa-spin me-2"></i>Verifying...</>
+                ) : (
+                  <><i className="fa-solid fa-right-to-bracket me-2"></i>Start Exam</>
+                )}
+              </button>
+            </>
+          )}
           <div className="text-center small text-muted mt-3">
             Need help? Contact your exam administrator.
           </div>

@@ -1,12 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 // Google Sign-In used to prove that the person opening an exam link owns the
-// email the link was sent to. VITE_GOOGLE_CLIENT_ID must be set (same value
-// as on the registration page). It is REQUIRED for the exam links: when it is
-// empty an error is shown and the exam cannot be opened.
+// email the link was sent to.
+//
+// How it works (full-page sign-in, like a normal "Sign in with Google" site):
+//   1. The candidate presses "Sign in with Google".
+//   2. The browser goes to Google's "Choose an account" page.
+//   3. After choosing, Google sends the browser to /google-callback, which saves
+//      the signed Google ID token and returns to the exam link.
+//   4. This component then checks the chosen account's email against the
+//      registered email. The server checks it again before the exam starts.
+//
+// VITE_GOOGLE_CLIENT_ID must be set. It is REQUIRED for the exam links: when it
+// is empty an error is shown and the exam cannot be opened.
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
+export const GOOGLE_CALLBACK_PATH = "/google-callback";
 
-function decodeJwtPayload(token) {
+export const KEY_TOKEN = "gv_idtoken";
+export const KEY_NONCE = "gv_nonce";
+export const KEY_RETURN = "gv_return";
+export const KEY_ERR = "gv_err";
+
+export function decodeJwtPayload(token) {
   try {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
     const json = decodeURIComponent(
@@ -18,73 +33,94 @@ function decodeJwtPayload(token) {
   }
 }
 
-function loadGoogleScript() {
-  return new Promise((resolve, reject) => {
-    if (window.google && window.google.accounts && window.google.accounts.id) return resolve();
-    const existing = document.getElementById("google-gsi-script");
-    if (existing) {
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", reject);
-      return;
-    }
-    const sc = document.createElement("script");
-    sc.id = "google-gsi-script";
-    sc.src = "https://accounts.google.com/gsi/client";
-    sc.async = true;
-    sc.defer = true;
-    sc.onload = () => resolve();
-    sc.onerror = reject;
-    document.head.appendChild(sc);
+function store(k, v) {
+  try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ }
+}
+function read(k) {
+  try { return sessionStorage.getItem(k) || ""; } catch (e) { return ""; }
+}
+function drop(k) {
+  try { sessionStorage.removeItem(k); } catch (e) { /* ignore */ }
+}
+
+function randomString() {
+  const a = new Uint8Array(16);
+  (window.crypto || window.msCrypto).getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The Google "Choose an account" page address. Pure function (easy to test).
+export function buildGoogleAuthUrl({ clientId, origin, nonce }) {
+  const p = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: origin + GOOGLE_CALLBACK_PATH,
+    response_type: "id_token",
+    scope: "openid email",
+    nonce,
+    prompt: "select_account"
   });
+  return "https://accounts.google.com/o/oauth2/v2/auth?" + p.toString();
 }
 
 // props:
 //   expectedEmail - the registered email this link belongs to
-//   onVerified(idToken) - called once the signed-in Google account matches
+//   onVerified(idToken) - called once the chosen Google account matches
 //   resetKey - change this value to ask for a fresh sign-in (e.g. after the server rejected the token)
-export default function GoogleVerify({ expectedEmail, onVerified, resetKey }) {
-  const btnRef = useRef(null);
+//   returnTo - page to come back to after Google (default: the current address)
+export default function GoogleVerify({ expectedEmail, onVerified, resetKey, returnTo }) {
   const [error, setError] = useState("");
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const expected = String(expectedEmail || "").trim().toLowerCase();
 
+  // Coming back from Google: pick up the token that /google-callback saved.
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return undefined;
+    if (!GOOGLE_CLIENT_ID) return;
     setVerifiedEmail("");
-    let cancelled = false;
-    loadGoogleScript()
-      .then(() => {
-        if (cancelled || !btnRef.current) return;
-        btnRef.current.innerHTML = "";
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: (resp) => {
-            const payload = decodeJwtPayload(resp.credential);
-            if (!payload || !payload.email) {
-              setError("Google sign-in failed. Please try again.");
-              return;
-            }
-            const got = String(payload.email).toLowerCase();
-            if (expected && got !== expected) {
-              setError(
-                `You signed in as ${got}, but this exam link was sent to ${expected}. ` +
-                `Open this link in Chrome signed in with ${expected}.`
-              );
-              return;
-            }
-            setError("");
-            setVerifiedEmail(got);
-            onVerified(resp.credential);
-          }
-        });
-        window.google.accounts.id.renderButton(btnRef.current, {
-          theme: "outline", size: "large", text: "signin_with", shape: "rectangular", width: 300
-        });
-      })
-      .catch(() => setError("Could not load Google sign-in. Check your internet connection and refresh the page."));
-    return () => { cancelled = true; };
+    const here = window.location.pathname + window.location.search;
+
+    const err = read(KEY_ERR);
+    if (err) {
+      drop(KEY_ERR);
+      setError(err);
+      return;
+    }
+
+    const token = read(KEY_TOKEN);
+    if (!token) return;
+    // Only use a token that was asked for from this same exam link.
+    if (read(KEY_RETURN) !== here) return;
+    drop(KEY_TOKEN);
+    drop(KEY_RETURN);
+
+    const payload = decodeJwtPayload(token);
+    if (!payload || !payload.email) {
+      setError("Google sign-in failed. Please try again.");
+      return;
+    }
+    const got = String(payload.email).toLowerCase();
+    if (expected && got !== expected) {
+      setError(
+        `You signed in as ${got}, but this exam link was sent to ${expected}. ` +
+        `Please sign in again with ${expected}.`
+      );
+      return;
+    }
+    setError("");
+    setVerifiedEmail(got);
+    onVerified(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expected, resetKey]);
+
+  function signIn() {
+    const nonce = randomString();
+    store(KEY_NONCE, nonce);
+    store(KEY_RETURN, returnTo || window.location.pathname + window.location.search);
+    drop(KEY_TOKEN);
+    drop(KEY_ERR);
+    window.location.assign(
+      buildGoogleAuthUrl({ clientId: GOOGLE_CLIENT_ID, origin: window.location.origin, nonce })
+    );
+  }
 
   // Not configured: the exam must NOT open without the email check, so say so
   // clearly (the server refuses the sign-in as well).
@@ -104,10 +140,31 @@ export default function GoogleVerify({ expectedEmail, onVerified, resetKey }) {
         </div>
       ) : (
         <>
-          <div className="small text-muted mb-2">
-            To protect the exam, sign in with the Google account <b>{expected || "you registered with"}</b>.
+          <button
+            type="button"
+            onClick={signIn}
+            className="btn w-100 fw-bold d-flex align-items-center justify-content-center"
+            style={{
+              background: "linear-gradient(90deg, #e8503a 0%, #f39c12 100%)",
+              color: "#fff",
+              padding: "14px 16px",
+              borderRadius: 10,
+              border: "none",
+              gap: 10,
+              fontSize: "1rem"
+            }}
+          >
+            <span
+              style={{
+                background: "#fff", color: "#4285f4", borderRadius: "50%", width: 24, height: 24,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.85rem"
+              }}
+            >G</span>
+            Sign in with Google
+          </button>
+          <div className="small text-muted mt-2">
+            You will be asked to choose a Google account{expected ? <> — choose <b>{expected}</b></> : null}.
           </div>
-          <div className="d-flex justify-content-center"><div ref={btnRef}></div></div>
         </>
       )}
       {error && <div className="text-danger small mt-2">{error}</div>}

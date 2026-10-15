@@ -196,7 +196,12 @@ export default function Round2Login() {
             </div>
 
             {needGoogle && (
-              <GoogleVerify expectedEmail={email.trim()} resetKey={googleReset} onVerified={setGoogleToken} />
+              <GoogleVerify
+                expectedEmail={email.trim()}
+                resetKey={googleReset}
+                onVerified={setGoogleToken}
+                returnTo={`/round2-login?email=${encodeURIComponent(email.trim())}&code=${encodeURIComponent(accessCode.trim())}`}
+              />
             )}
 
             <button type="submit" disabled={submitting} className="btn w-100 mb-2 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>

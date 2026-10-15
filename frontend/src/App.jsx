@@ -11,12 +11,14 @@ import StudentRegister from "./pages/StudentRegister";
 import ExamAccessGate from "./pages/ExamAccessGate";
 import RegisterRedirect from "./pages/RegisterRedirect";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
+import GoogleCallback from "./pages/GoogleCallback";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<RegisterRedirect />} />
       <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+      <Route path="/google-callback" element={<GoogleCallback />} />
       <Route path="/login" element={<Login />} />
       <Route path="/admin-login" element={<AdminLogin />} />
       <Route path="/round2-login" element={<Round2Login />} />

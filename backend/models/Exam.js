@@ -40,7 +40,16 @@ const ExamSchema = new mongoose.Schema(
     // its own — its duration/total-questions are auto-summed from the
     // referenced sections. A record with an empty sectionIds array is a
     // plain section, exactly as before — nothing changes for existing data.
-    sectionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Exam' }]
+    sectionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Exam' }],
+    // ---- Offline exam (campus drive) ----
+    // An exam with examMode 'campus' is an OFFLINE exam: it has its own web
+    // address made from the exam name (slug, e.g. "raisoniexam" ->
+    // www.yoursite.com/raisoniexam) and ONE access code that the admin tells the
+    // students. Students open that address and enter name, email, mobile and the
+    // code - no registration and no emailed link. Round 2 for the same exam is at
+    // /<slug>/round-2. Online exams leave both empty.
+    slug: { type: String, trim: true, lowercase: true, default: '' },
+    campusAccessCode: { type: String, trim: true, uppercase: true, default: '' }
   },
   { timestamps: true }
 );

@@ -12,6 +12,8 @@ import ExamAccessGate from "./pages/ExamAccessGate";
 import RegisterRedirect from "./pages/RegisterRedirect";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import GoogleCallback from "./pages/GoogleCallback";
+import OfflineExamEntry from "./pages/OfflineExamEntry";
+import OfflineRound2Login from "./pages/OfflineRound2Login";
 
 export default function App() {
   return (
@@ -29,6 +31,9 @@ export default function App() {
       <Route path="/second-level-exam" element={<SecondLevelExam />} />
       <Route path="/summary" element={<Summary />} />
       <Route path="/admin-dashboard" element={<AdminDashboard />} />
+      {/* Offline exam: its own address made from the exam name, e.g. /raisoniexam */}
+      <Route path="/:slug" element={<OfflineExamEntry />} />
+      <Route path="/:slug/round-2" element={<OfflineRound2Login />} />
     </Routes>
   );
 }

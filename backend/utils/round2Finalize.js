@@ -157,7 +157,10 @@ async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason
     student.roundProgress.r2 = round2Status;
     // Final "cleared both rounds" email only ever goes to candidates who
     // actually passed Round 2 - never on FAIL, and never twice.
-    if (round2Status === 'PASS' && !student.finalEmailSentAt) {
+    // Offline exams (entered through the exam's own address): no automatic
+    // mail - the admin sends it with the "Send HR round mail" button.
+    const offline = await ExamAssignment.exists({ student: student._id, round: 1, entryMode: 'campus' });
+    if (round2Status === 'PASS' && !student.finalEmailSentAt && !offline) {
       await sendFinalSuccessEmail(student);
       student.finalEmailSentAt = new Date();
     }

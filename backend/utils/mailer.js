@@ -21,6 +21,11 @@ function getBaseUrl() {
   }
 }
 
+// True when the server has the SMTP settings it needs to send mail.
+function isMailConfigured() {
+  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+}
+
 function getTransporter() {
   if (transporter) return transporter;
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
@@ -70,9 +75,12 @@ function wrapTemplate(title, bodyHtml) {
   </div>`;
 }
 
-async function sendRound2InvitationEmail(student, round2AccessCode, window) {
+// `examSlug` (offline exams only): the Round 2 link is then the exam's own
+// address, <site>/<examSlug>/round-2, instead of the general Round 2 page.
+async function sendRound2InvitationEmail(student, round2AccessCode, window, examSlug) {
   const baseUrl = getBaseUrl();
-  const link = `${baseUrl}/round2-login?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2AccessCode)}`;
+  const path = examSlug ? `/${examSlug}/round-2` : '/round2-login';
+  const link = `${baseUrl}${path}?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2AccessCode)}`;
   const windowRow = (window && window.startTime && window.endTime)
     ? `<tr><td style="padding: 8px 0; color: #64748b;">Login window</td><td style="padding: 8px 0; text-align: right; font-weight: bold; color: #b91c1c;">${formatTime(window.startTime)} – ${formatTime(window.endTime)}</td></tr>`
     : '';
@@ -154,4 +162,4 @@ async function sendExamInvitationEmail(student, exam, assignment) {
   return sendMail({ to: student.email, subject: `Campus Recruitment Exam – Round ${assignment.round} Exam Invitation`, html });
 }
 
-module.exports = { sendMail, sendRound2InvitationEmail, sendFinalSuccessEmail, sendExamInvitationEmail };
+module.exports = { isMailConfigured, getBaseUrl, sendMail, sendRound2InvitationEmail, sendFinalSuccessEmail, sendExamInvitationEmail };

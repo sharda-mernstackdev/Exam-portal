@@ -148,7 +148,7 @@ export default function AdminDashboard() {
             />
           )}
           {activeTab === "resultsReport" && (
-            <ResultsReportTab journey={journey} qualifyingPct={qualifyingPct} />
+            <ResultsReportTab journey={journey} qualifyingPct={qualifyingPct} onDataChanged={loadAll} />
           )}
           {activeTab === "settings" && (
             <SettingsTab

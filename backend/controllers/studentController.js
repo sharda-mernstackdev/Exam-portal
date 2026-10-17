@@ -2,6 +2,8 @@ const Student = require('../models/Student');
 const Submission = require('../models/Submission');
 const SecondLevelResult = require('../models/SecondLevelResult');
 const ExamAssignment = require('../models/ExamAssignment');
+const { scheduleRound2Mails, sendFinalMailsNow } = require('../utils/round2Manual');
+const { isMailConfigured } = require('../utils/mailer');
 
 // GET /api/admin/students — "Registered Students" tab in admin dashboard
 exports.listStudents = async (req, res) => {
@@ -44,8 +46,18 @@ exports.candidateJourney = async (req, res) => {
     if (!latestR2ByStudent[key]) latestR2ByStudent[key] = r;
   });
 
+  // Which exam each candidate took Round 1 in, for the per-exam mail buttons
+  // on the Results Report page.
+  const r1Assignments = await ExamAssignment.find({ round: 1 }).sort({ updatedAt: -1 }).populate('exam', 'title examMode').lean();
+  const assignmentByStudent = {};
+  r1Assignments.forEach((a) => {
+    const key = String(a.student);
+    if (!assignmentByStudent[key]) assignmentByStudent[key] = a; // newest first
+  });
+
   const rows = students.map((student) => {
     const r1 = latestSubmissionByStudent[String(student._id)];
+    const asg = assignmentByStudent[String(student._id)];
     const r2 = latestR2ByStudent[String(student._id)];
 
     let finalStatus = 'PENDING';
@@ -58,9 +70,15 @@ exports.candidateJourney = async (req, res) => {
       studentId: student._id,
       name: student.fullName,
       email: student.email,
+      phone: student.phone || '',
       round1: r1 ? { score: r1.score, total: r1.totalQuestions, percentage: r1.percentage, status: r1.round1Status, submittedOn: r1.createdAt } : null,
+      examId: asg && asg.exam ? asg.exam._id : null,
+      examTitle: asg && asg.exam ? asg.exam.title : '',
+      examMode: asg && asg.exam ? asg.exam.examMode : '',
+      entryMode: asg ? asg.entryMode : '',
       round2Eligible: student.round2Eligible,
       round2EmailSent: !!student.round2EmailSentAt,
+      round2EmailDueAt: student.round2EmailDueAt || null,
       round2: r2 ? { score: r2.totalScore, status: r2.round2Status, submittedOn: r2.createdAt } : null,
       round2Completed: student.round2Completed,
       finalStatus,
@@ -69,4 +87,38 @@ exports.candidateJourney = async (req, res) => {
   });
 
   res.json(rows);
+};
+
+function mailNotSetUp(res) {
+  return res.status(503).json({ message: 'Email is not set up on the server (SMTP settings are missing), so no mail can be sent.' });
+}
+
+// POST /api/admin/round2/send-emails - "Send Round 2 mail" buttons.
+// Body (all optional): { examId, studentIds }. Schedules the Round 2 mail,
+// 10 minutes from now, for every candidate in that scope who passed Round 1 and
+// has not been mailed or scheduled yet. Replies { scheduled, sendAt, delayMinutes }.
+exports.sendRound2Emails = async (req, res) => {
+  try {
+    if (!isMailConfigured()) return mailNotSetUp(res);
+    const { examId, studentIds } = req.body || {};
+    res.json(await scheduleRound2Mails({ examId, studentIds }));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ message: err.message });
+    console.error(err);
+    res.status(500).json({ message: 'Could not schedule the Round 2 mails.' });
+  }
+};
+
+// POST /api/admin/final/send-emails - "Send HR round mail" buttons: sends right
+// away to candidates who passed Round 2 and have not been mailed yet.
+exports.sendFinalEmails = async (req, res) => {
+  try {
+    if (!isMailConfigured()) return mailNotSetUp(res);
+    const { examId, studentIds } = req.body || {};
+    res.json(await sendFinalMailsNow({ examId, studentIds }));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ message: err.message });
+    console.error(err);
+    res.status(500).json({ message: 'Could not send the HR round mails.' });
+  }
 };

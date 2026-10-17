@@ -15,6 +15,14 @@ const ExamAssignmentSchema = new mongoose.Schema(
       enum: ['Registered', 'InvitationSent', 'NotStarted', 'InProgress', 'Completed'],
       default: 'Registered'
     },
+    // How the candidate got in: 'online' = registered + emailed exam link,
+    // 'campus' = the offline exam address (name + email + mobile + access code).
+    entryMode: { type: String, enum: ['online', 'campus'], default: 'online' },
+    // Offline exam: THIS candidate's own start and end time. The exam starts
+    // for each candidate a fixed time (2 minutes) after they entered, and runs
+    // for the exam's full duration (all question sets added together).
+    personalStartTime: { type: Date },
+    personalEndTime: { type: Date },
     invitationSentAt: { type: Date },
     startedAt: { type: Date },
     completedAt: { type: Date }

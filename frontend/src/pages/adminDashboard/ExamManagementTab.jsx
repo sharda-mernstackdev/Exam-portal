@@ -189,23 +189,26 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
       alert("Add at least one question set to this test.");
       return;
     }
-    if (testForm.registrationStartTime && testForm.registrationEndTime &&
+    if (testForm.examMode !== "campus" && testForm.registrationStartTime && testForm.registrationEndTime &&
         new Date(testForm.registrationEndTime) <= new Date(testForm.registrationStartTime)) {
       alert("Registration End must be after Registration Start.");
       return;
     }
+    const offline = testForm.examMode === "campus";
     const payload = {
       title: testForm.name.trim(),
       active: testForm.status === "Active",
       sectionIds: testForm.sectionIds,
-      examDate: testForm.examDate || undefined,
-      startTime: toISTISOString(testForm.startTime) || undefined,
-      endTime: toISTISOString(testForm.endTime) || undefined,
+      // An offline exam has no schedule, registration or instructions page: each
+      // student's own start / end time is worked out when they enter.
+      examDate: offline ? null : (testForm.examDate || undefined),
+      startTime: offline ? null : (toISTISOString(testForm.startTime) || undefined),
+      endTime: offline ? null : (toISTISOString(testForm.endTime) || undefined),
       loginWindowMinutes: Number(testForm.loginWindowMinutes) || 5,
-      instructions: testForm.instructions.trim() || undefined,
+      instructions: offline ? undefined : (testForm.instructions.trim() || undefined),
       examMode: testForm.examMode || "campus",
-      registrationStartTime: toISTISOString(testForm.registrationStartTime) || null,
-      registrationEndTime: toISTISOString(testForm.registrationEndTime) || null
+      registrationStartTime: offline ? null : (toISTISOString(testForm.registrationStartTime) || null),
+      registrationEndTime: offline ? null : (toISTISOString(testForm.registrationEndTime) || null)
     };
     const req = editingTestId ? ExamAPI.adminUpdateExam(editingTestId, payload) : ExamAPI.adminCreateExam(payload);
     req
@@ -438,7 +441,7 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               <label className="form-label small fw-bold text-secondary">Exam Mode</label>
               <select className="form-select" value={testForm.examMode} onChange={(e) => setTestForm({ ...testForm, examMode: e.target.value })}>
                 <option value="online">Online exam — students can submit early</option>
-                <option value="campus">Campus drive — submit only at end time</option>
+                <option value="campus">Offline exam (campus drive) — own web address + access code, submit only at end time</option>
               </select>
             </div>
 
@@ -464,6 +467,16 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               </div>
             )}
 
+            {testForm.examMode === "campus" && (
+              <div className="col-12">
+                <div className="small text-muted">
+                  Offline exam: after you create it, its web address (made from the test name) and access code appear on the exam card below.
+                </div>
+              </div>
+            )}
+
+            {testForm.examMode !== "campus" && (
+              <>
             <div className="col-12"><hr className="my-1" /></div>
             <div className="col-12 small fw-bold text-uppercase text-secondary">Scheduled session (optional — leave blank for an always-open test)</div>
 
@@ -492,6 +505,8 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
               <input type="number" className="form-control" min="1" placeholder="5"
                 value={testForm.loginWindowMinutes} onChange={(e) => setTestForm({ ...testForm, loginWindowMinutes: e.target.value })} />
             </div>
+            {testForm.examMode !== "campus" && (
+              <>
             <div className="col-md-4">
               <label className="form-label small fw-bold text-secondary">Registration Start</label>
               <DateTimePicker
@@ -509,11 +524,15 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
             <div className="col-md-4 d-flex align-items-end">
               <div className="small text-muted">Students can register only between these two times.</div>
             </div>
+              </>
+            )}
             <div className="col-12">
               <label className="form-label small fw-bold text-secondary">Instructions (shown on registration page)</label>
               <textarea className="form-control" placeholder="Optional — e.g. bring a valid ID, arrive 15 minutes early, exam rules, etc." rows={4}
                 value={testForm.instructions} onChange={(e) => setTestForm({ ...testForm, instructions: e.target.value })} />
             </div>
+              </>
+            )}
 
             <div className="col-12 d-flex gap-2 mt-2">
               <button type="submit" className="btn btn-dark fw-bold px-4">{editingTestId ? "Save Changes" : "+ Create Test"}</button>
@@ -574,8 +593,22 @@ export default function ExamManagementTab({ exams, questions, onExamsChanged, on
                       )}
                     </div>
 
+                    {t.examMode === "campus" && t.slug && (
+                      <div className="mt-2 small">
+                        <div className="d-flex justify-content-between gap-2 border-top pt-1 mt-1">
+                          <span className="text-break">Round 1: <b>{FRONTEND_URL}/{t.slug}</b></span>
+                          <button type="button" className="btn btn-sm btn-outline-primary py-0" onClick={() => navigator.clipboard && navigator.clipboard.writeText(`${FRONTEND_URL}/${t.slug}`).then(() => alert("Exam address copied."))}>Copy</button>
+                        </div>
+                        <div className="d-flex justify-content-between gap-2 border-top pt-1 mt-1">
+                          <span className="text-break">Round 2: <b>{FRONTEND_URL}/{t.slug}/round-2</b></span>
+                          <button type="button" className="btn btn-sm btn-outline-primary py-0" onClick={() => navigator.clipboard && navigator.clipboard.writeText(`${FRONTEND_URL}/${t.slug}/round-2`).then(() => alert("Round 2 address copied."))}>Copy</button>
+                        </div>
+                        <div className="border-top pt-1 mt-1">Access code: <b style={{ letterSpacing: 2 }}>{t.campusAccessCode}</b></div>
+                      </div>
+                    )}
+
                     <div className="d-flex flex-wrap gap-2 mt-3">
-                      {t.startTime && (
+                      {t.startTime && !(t.examMode === "campus" && t.slug) && (
                         <button type="button" className="btn btn-sm btn-outline-primary" onClick={() => copyRegistrationLink(t._id)}>
                           <i className="fa-solid fa-link me-1"></i>Copy link
                         </button>

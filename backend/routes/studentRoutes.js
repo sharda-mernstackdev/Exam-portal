@@ -6,6 +6,8 @@ const { studentAuth, adminAuth } = require('../middleware/auth');
 
 router.get('/admin/students', adminAuth, studentCtrl.listStudents);
 router.get('/admin/candidate-journey', adminAuth, studentCtrl.candidateJourney);
+router.post('/admin/round2/send-emails', adminAuth, studentCtrl.sendRound2Emails);
+router.post('/admin/final/send-emails', adminAuth, studentCtrl.sendFinalEmails);
 router.delete('/admin/students', adminAuth, studentCtrl.clearStudents);
 router.delete('/admin/students/:id', adminAuth, studentCtrl.deleteStudent);
 

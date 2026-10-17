@@ -22,6 +22,18 @@ async function getCategoryLimit(category) {
 // sectionIds array). If admin has never created one, returns null and every
 // caller falls back to the original "merge all active section exams"
 // behaviour, so existing deployments are unaffected.
+// The Test an OFFLINE-exam candidate belongs to (the exam whose address they
+// entered), so two offline exams can run side by side with their own question
+// sets. Returns null for every other candidate - they keep the single
+// active-Test behaviour above.
+async function getTestForStudent(studentId) {
+  if (!studentId) return null;
+  const a = await ExamAssignment.findOne({ student: studentId, round: 1, entryMode: 'campus' }).sort({ updatedAt: -1 }).select('exam');
+  if (!a) return null;
+  const test = await Exam.findById(a.exam).populate('sectionIds');
+  return test && test.sectionIds && test.sectionIds.length ? test : null;
+}
+
 async function findActiveTest() {
   return Exam.findOne({ active: true, 'sectionIds.0': { $exists: true } }).populate('sectionIds');
 }
@@ -169,24 +181,37 @@ exports.listActiveQuestions = async (req, res) => {
     const current = await ExamAssignment.findOne({ student: studentIdForCheck, round: 1, status: 'InProgress' })
       .sort({ startedAt: -1 })
       .populate('exam', 'startTime');
-    const exam = current && current.exam;
-    if (exam && exam.startTime) {
-      const startMs = new Date(exam.startTime).getTime();
+    if (current && current.entryMode === 'campus' && current.personalStartTime) {
+      // Offline exam: every candidate has their OWN start time (entry + 2 min)
+      // and end time (start + the exam's duration). The paper opens from the
+      // personal start and can be reloaded any time until the personal end.
+      const startMs = new Date(current.personalStartTime).getTime();
       if (Date.now() < startMs - START_TOLERANCE_MS) {
+        return res.status(403).json({ message: 'Your exam has not started yet. It will open automatically at your start time.' });
+      }
+      if (current.personalEndTime && Date.now() > new Date(current.personalEndTime).getTime() + 30000) {
+        return res.status(403).json({ message: 'Your exam time is over.' });
+      }
+    } else {
+      const exam = current && current.exam;
+      if (exam && exam.startTime) {
+        const startMs = new Date(exam.startTime).getTime();
+        if (Date.now() < startMs - START_TOLERANCE_MS) {
+          return res.status(403).json({
+            message: 'The exam has not started yet. It will open automatically at the scheduled start time.'
+          });
+        }
+      }
+      const deadline = exam ? paperLoadDeadline(exam) : null;
+      if (deadline && new Date() > deadline) {
         return res.status(403).json({
-          message: 'The exam has not started yet. It will open automatically at the scheduled start time.'
+          message: 'Exam entry is closed. The exam could only be opened until its scheduled start time.'
         });
       }
     }
-    const deadline = exam ? paperLoadDeadline(exam) : null;
-    if (deadline && new Date() > deadline) {
-      return res.status(403).json({
-        message: 'Exam entry is closed. The exam could only be opened until its scheduled start time.'
-      });
-    }
   }
 
-  const visible = await getVisibleQuestions();
+  const visible = await getVisibleQuestions(await getTestForStudent(studentIdForCheck));
   // The answer key never leaves the server: scoring happens in
   // controllers/submissionController.js from the database, so a browser
   // extension / DevTools cannot read the correct answers from this response.
@@ -196,11 +221,11 @@ exports.listActiveQuestions = async (req, res) => {
 // The questions a candidate is allowed to see right now (active Test, or the
 // original "all active sections" behaviour). Shared by the paper endpoint and
 // by submission scoring, so both always agree on what the paper was.
-async function getVisibleQuestions() {
+async function getVisibleQuestions(testOverride) {
   const questions = await Question.find({ active: true }).sort({ createdAt: 1 });
   const exams = await Exam.find({}, 'title active sectionIds');
 
-  const activeTest = await findActiveTest();
+  const activeTest = testOverride || (await findActiveTest());
 
   if (activeTest) {
     // A named Test is active — only show categories belonging to its
@@ -230,6 +255,7 @@ function stripAnswerKey(q) {
 }
 
 exports.getVisibleQuestions = getVisibleQuestions;
+exports.getTestForStudent = getTestForStudent;
 exports.shuffleOptions = shuffleOptions;
 
 // GET /api/admin/questions — full bank for the admin question-bank UI

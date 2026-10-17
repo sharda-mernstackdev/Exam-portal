@@ -4,6 +4,8 @@ const Student = require('../models/Student');
 const Admin = require('../models/Admin');
 const Settings = require('../models/Settings');
 const SecondLevelExam = require('../models/SecondLevelExam');
+const Exam = require('../models/Exam');
+const ExamAssignment = require('../models/ExamAssignment');
 const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { requireRegisteredGoogleEmail } = require('../utils/googleAuth');
@@ -129,6 +131,69 @@ exports.round2Login = async (req, res) => {
     // ---- One device at a time (Round 2 session) ----
     // Atomic: if this candidate already has a live Round 2 session on another
     // device, this sign-in is refused (the first device keeps the exam).
+    const deviceId = String(req.body.deviceId || '').slice(0, 64);
+    const started = await startRoundSession(Student, student._id, 2, deviceId);
+    if (!started) {
+      return res.status(409).json({
+        message: 'Round 2 is already open on another device. Please continue on that device. If it was closed, wait about one minute and try again.'
+      });
+    }
+    const token = signStudentToken(student, started.sid);
+    res.json({
+      token,
+      student: { id: student._id, fullName: student.fullName, email: student.email, phone: student.phone }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error during Round 2 login.' });
+  }
+};
+
+// POST /api/campus/:slug/round2
+// Round 2 of an OFFLINE exam: www.site.com/<exam>/round-2. The candidate enters
+// the email they used in Round 1 and the Round 2 access code; if that email
+// passed Round 1 of THIS exam, the exam opens straight away (no Google
+// sign-in, no time window - it is done on the college's own devices).
+exports.campusRound2Login = async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    const exam = slug ? await Exam.findOne({ slug, examMode: 'campus', active: true }) : null;
+    if (!exam) return res.status(404).json({ message: 'This exam web address is not valid. Please check the address in your email.' });
+
+    const email = (req.body.email || '').trim().toLowerCase();
+    const code = (req.body.round2AccessCode || '').trim();
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ message: 'Please enter a valid email address.' });
+    }
+    if (!code) {
+      return res.status(400).json({ message: 'Please enter the Round 2 access code from your email.' });
+    }
+
+    const student = await Student.findOne({ email });
+    const tookRound1 = student && await ExamAssignment.exists({ student: student._id, exam: exam._id, round: 1 });
+    if (!student || !tookRound1) {
+      return res.status(404).json({ message: 'No Round 1 record was found for this email in this exam. Please use the email you gave in Round 1.' });
+    }
+    if (student.roundProgress.r1 !== 'PASS' || !student.round2Eligible) {
+      return res.status(403).json({ message: 'You are not eligible for Round 2. Only candidates who passed Round 1 can enter.' });
+    }
+    if (student.round2Completed) {
+      return res.status(409).json({ message: 'You have already completed Round 2. Multiple attempts are not allowed.' });
+    }
+
+    const settings = await Settings.findOne({ key: 'portal' });
+    const validCode = settings && settings.round2AccessCode;
+    if (!validCode) {
+      return res.status(503).json({ message: 'Round 2 has not been configured yet. Please contact your administrator.' });
+    }
+    if (code.toUpperCase() !== validCode.toUpperCase()) {
+      return res.status(401).json({ message: 'Incorrect Round 2 access code. Please check your email.' });
+    }
+
+    if (isMobileRequest(req)) {
+      return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
+    }
+
     const deviceId = String(req.body.deviceId || '').slice(0, 64);
     const started = await startRoundSession(Student, student._id, 2, deviceId);
     if (!started) {

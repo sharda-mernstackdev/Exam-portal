@@ -2,6 +2,7 @@ const Student = require('../models/Student');
 const Settings = require('../models/Settings');
 const SecondLevelExam = require('../models/SecondLevelExam');
 const { sendRound2InvitationEmail } = require('./mailer');
+const { offlineSlugFor } = require('./round2Manual');
 
 // Round 2 invitation goes out this many minutes AFTER Round 1 has ended
 // (not at the moment the student submits).
@@ -47,7 +48,9 @@ async function sendDueRound2Emails() {
         { new: true }
       );
       if (!student) break;
-      const result = await sendRound2InvitationEmail(student, round2Code, window);
+      // Offline exam candidates get the exam's own Round 2 address and no time window.
+      const slug = await offlineSlugFor(student._id);
+      const result = await sendRound2InvitationEmail(student, round2Code, slug ? null : window, slug);
       if (!result.sent) {
         // Sending failed (or SMTP not configured): release the claim so the
         // next run retries.

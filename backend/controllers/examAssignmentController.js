@@ -61,7 +61,8 @@ exports.getCurrentRegistrationExam = async (req, res) => {
   // Only a combined Test (sectionIds present) is something a student
   // registers/logs in for — a raw question-set section (Aptitude,
   // Reasoning, ...) is never a registration target on its own.
-  const testFilter = { active: true, 'sectionIds.0': { $exists: true } };
+  // Offline exams (they have their own web address) are never registration targets.
+  const testFilter = { active: true, 'sectionIds.0': { $exists: true }, slug: { $in: ['', null] } };
 
   // Prefer a Test that's still actually open for registration (i.e. before
   // the admin's registration end time). Falling back to "exam hasn't ended
@@ -87,6 +88,7 @@ exports.getPublicExamInfo = async (req, res) => {
     examDate: exam.examDate,
     startTime: exam.startTime,
     endTime: exam.endTime,
+    durationMinutes: exam.durationMinutes,
     loginWindowMinutes: exam.loginWindowMinutes,
     examMode: exam.examMode || 'campus',
     instructions: exam.instructions,
@@ -108,6 +110,9 @@ exports.registerForExam = async (req, res) => {
     const exam = await Exam.findById(req.params.examId);
     if (!exam || !exam.active) {
       return res.status(404).json({ message: 'This exam is not available for registration.' });
+    }
+    if (exam.examMode === 'campus' && exam.slug) {
+      return res.status(403).json({ message: 'This is an offline exam. Please open the exam web address given by the exam administrator and enter your details there.' });
     }
 
     // ---- Registration window (set by the admin on the exam) ----
@@ -300,6 +305,167 @@ exports.verifyExamAccess = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error during exam access verification.' });
+  }
+};
+
+// ================= OFFLINE EXAM (campus drive) =================
+// The exam has its own web address made from its name (www.site.com/raisoniexam).
+// The candidate enters name, email, mobile and the access code the admin tells
+// them. No registration, no emailed link.
+//
+// Timing: the exam starts for each candidate OFFLINE_START_DELAY_MINUTES after
+// they pressed Submit (10:02 -> starts 10:04; 10:03 -> starts 10:05), and runs
+// for the exam's full duration (all question sets added together). The
+// instructions page counts down to that personal start time.
+const OFFLINE_START_DELAY_MINUTES = 2;
+
+function newAssignmentCode() {
+  return generateAccessCode() + generateAccessCode().slice(0, 2);
+}
+
+async function findOfflineExam(slug) {
+  const clean = String(slug || '').trim().toLowerCase();
+  if (!clean) return null;
+  return Exam.findOne({ slug: clean, examMode: 'campus', active: true });
+}
+
+// GET /api/campus/:slug - what the entry page needs (never the code).
+exports.offlineExamInfo = async (req, res) => {
+  const exam = await findOfflineExam(req.params.slug);
+  if (!exam) return res.status(404).json({ message: 'This exam web address is not valid. Please check the address given by the exam administrator.' });
+  res.json({ title: exam.title, instructions: exam.instructions || '' });
+};
+
+// POST /api/campus/:slug/entry
+exports.campusEntry = async (req, res) => {
+  try {
+    const exam = await findOfflineExam(req.params.slug);
+    if (!exam) return res.status(404).json({ message: 'This exam web address is not valid. Please check the address given by the exam administrator.' });
+
+    const fullName = String(req.body.fullName || '').trim().replace(/\s+/g, ' ');
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const phone = String(req.body.phone || '').trim();
+    const accessCode = String(req.body.accessCode || '').trim().toUpperCase().replace(/\s+/g, '');
+
+    if (!fullName || !NAME_RE.test(fullName)) {
+      return res.status(400).json({ message: 'Please enter your full name (letters and spaces only).' });
+    }
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ message: 'Please enter a valid email address.' });
+    }
+    if (!MOBILE_RE.test(phone)) {
+      return res.status(400).json({ message: 'Please enter a valid 10-digit mobile number.' });
+    }
+    if (!accessCode) {
+      return res.status(400).json({ message: 'Please enter the access code given by the exam administrator.' });
+    }
+    if (!exam.campusAccessCode || accessCode !== String(exam.campusAccessCode).toUpperCase()) {
+      return res.status(401).json({ message: 'Incorrect access code. Please check the code given by the exam administrator.' });
+    }
+
+    // Laptop / desktop only.
+    if (isMobileRequest(req)) {
+      return res.status(403).json({ message: MOBILE_BLOCK_MESSAGE });
+    }
+
+    // Optional day window set on the exam: entry opens `loginWindowMinutes`
+    // before Exam Start and stops at Exam End. Several batches can use the same
+    // address inside that window. With no times set, the exam is always open.
+    const now = new Date();
+    const fmt = (d) => new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    if (exam.startTime) {
+      const opensAt = new Date(new Date(exam.startTime).getTime() - (exam.loginWindowMinutes || 5) * 60000);
+      if (now < opensAt) {
+        return res.status(403).json({ message: `This exam has not opened yet. You may enter from ${fmt(opensAt)}.` });
+      }
+    }
+    if (exam.endTime && now > new Date(exam.endTime)) {
+      return res.status(403).json({ message: 'This exam has ended. Entry is closed.' });
+    }
+
+    let student = await Student.findOne({ email });
+    let assignment = student ? await ExamAssignment.findOne({ student: student._id, exam: exam._id }) : null;
+
+    if (assignment && assignment.status === 'Completed') {
+      return res.status(409).json({ message: 'You have already completed this exam.' });
+    }
+    if (assignment && assignment.personalEndTime && now > new Date(assignment.personalEndTime)) {
+      return res.status(409).json({ message: 'Your exam time is over. You cannot enter this exam again.' });
+    }
+
+    if (!student) {
+      student = await Student.create({ fullName, email, phone });
+    } else if (student.fullName !== fullName || student.phone !== phone) {
+      student.fullName = fullName;
+      student.phone = phone;
+      await student.save();
+    }
+
+    // One device at a time (first device wins).
+    const deviceId = String(req.body.deviceId || '').slice(0, 64);
+    const started = await startRoundSession(Student, student._id, 1, deviceId);
+    if (!started) {
+      return res.status(409).json({
+        message: 'You are already logged in on another device. Please continue the exam on that device. If it was closed, wait about one minute and try again.'
+      });
+    }
+
+    const durationMinutes = Number(exam.durationMinutes) > 0 ? Number(exam.durationMinutes) : 30;
+
+    if (!assignment) {
+      const personalStartTime = new Date(now.getTime() + OFFLINE_START_DELAY_MINUTES * 60000);
+      const personalEndTime = new Date(personalStartTime.getTime() + durationMinutes * 60000);
+      for (let attempt = 0; attempt < 5 && !assignment; attempt++) {
+        try {
+          assignment = await ExamAssignment.create({
+            student: student._id,
+            exam: exam._id,
+            round: 1,
+            accessCode: newAssignmentCode(),
+            status: 'InProgress',
+            entryMode: 'campus',
+            personalStartTime,
+            personalEndTime,
+            startedAt: now
+          });
+        } catch (err) {
+          if (err && err.code === 11000 && err.keyPattern && err.keyPattern.accessCode) continue; // code clash: try another
+          if (err && err.code === 11000) {
+            // Two entries at the same moment for the same candidate: use the one that won.
+            assignment = await ExamAssignment.findOne({ student: student._id, exam: exam._id });
+            break;
+          }
+          throw err;
+        }
+      }
+      if (!assignment) return res.status(500).json({ message: 'Could not start the exam. Please try again.' });
+    } else if (!assignment.personalStartTime) {
+      // An assignment from before (e.g. registered earlier): give it personal times now.
+      assignment.personalStartTime = new Date(now.getTime() + OFFLINE_START_DELAY_MINUTES * 60000);
+      assignment.personalEndTime = new Date(assignment.personalStartTime.getTime() + durationMinutes * 60000);
+      assignment.entryMode = 'campus';
+      assignment.status = 'InProgress';
+      assignment.startedAt = assignment.startedAt || now;
+      await assignment.save();
+    }
+    // (A candidate who signs in again keeps the SAME start and end time.)
+
+    const token = signStudentToken(student, started.sid);
+    res.json({
+      token,
+      student: { id: student._id, fullName: student.fullName, email: student.email, phone: student.phone || '' },
+      exam: {
+        id: exam._id,
+        title: exam.title,
+        startTime: assignment.personalStartTime,
+        endTime: assignment.personalEndTime,
+        durationMinutes,
+        serverTime: new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error while entering the exam.' });
   }
 };
 

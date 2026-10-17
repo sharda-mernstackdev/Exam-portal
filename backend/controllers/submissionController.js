@@ -3,7 +3,7 @@ const Student = require('../models/Student');
 const Settings = require('../models/Settings');
 const ExamAssignment = require('../models/ExamAssignment');
 const { computeRound2EmailDueAt } = require('../utils/round2Scheduler');
-const { getVisibleQuestions, shuffleOptions } = require('./questionController');
+const { getVisibleQuestions, getTestForStudent, shuffleOptions } = require('./questionController');
 const { logViolation } = require('../utils/violation');
 
 // POST /api/submissions — student submits round 1 (dashboard.html "Complete Exam")
@@ -42,7 +42,7 @@ exports.createSubmission = async (req, res) => {
     }
 
     // ---- Rebuild the paper from the database ----
-    const visible = await getVisibleQuestions();
+    const visible = await getVisibleQuestions(await getTestForStudent(studentId));
     const byId = new Map(visible.map((q) => [String(q._id), q]));
 
     const seen = new Set();
@@ -144,17 +144,24 @@ exports.createSubmission = async (req, res) => {
     student.roundProgress.r1 = round1Status;
 
     // ---- Round 2 eligibility (server-side source of truth) ----
-    // A FAIL clears eligibility. A PASS sets eligibility and schedules the
-    // Round 2 invitation for 15 minutes after Round 1 ends (the background
-    // scheduler in utils/round2Scheduler.js sends it, exactly once), so
-    // candidates are not told the result the moment they submit.
+    // A FAIL clears eligibility. A PASS sets eligibility. For online exams it
+    // also schedules the Round 2 invitation for 15 minutes after Round 1 ends
+    // (the background scheduler in utils/round2Scheduler.js sends it, exactly
+    // once). For campus drive exams the admin sends the mail by button.
     if (round1Status === 'PASS') {
       student.round2Eligible = true;
       if (!student.round2EmailSentAt) {
         const r1Assignment = await ExamAssignment.findOne({ student: student._id, round: 1 })
           .sort({ updatedAt: -1 })
-          .populate('exam', 'endTime');
-        student.round2EmailDueAt = computeRound2EmailDueAt(r1Assignment && r1Assignment.exam);
+          .populate('exam', 'endTime examMode');
+        const r1Exam = r1Assignment && r1Assignment.exam;
+        // Offline exams (entered through the exam's own address): the Round 2
+        // mail is NOT sent automatically. The admin sends it with the "Send
+        // Round 2 mail" button on the Results Report page, when they decide.
+        // Online exams keep the automatic mail.
+        if (!(r1Assignment && r1Assignment.entryMode === 'campus')) {
+          student.round2EmailDueAt = computeRound2EmailDueAt(r1Exam);
+        }
       }
     } else {
       student.round2Eligible = false;

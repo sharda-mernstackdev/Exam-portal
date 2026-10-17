@@ -4,7 +4,8 @@ const StudentSchema = new mongoose.Schema(
   {
     fullName: { type: String, required: true, trim: true },
     email: { type: String, required: true, trim: true, lowercase: true, unique: true },
-    phone: { type: String, required: true, trim: true },
+    // Optional: a campus-drive candidate enters only name + email.
+    phone: { type: String, trim: true, default: '' },
     registeredAt: { type: Date, default: Date.now },
     lastLoginAt: { type: Date },
     // Id of the one currently-valid login session (see utils/session.js).
@@ -35,7 +36,8 @@ const StudentSchema = new mongoose.Schema(
     // middleware), never trusted from the client.
     round2Eligible: { type: Boolean, default: false },
     round2EmailSentAt: { type: Date },
-    // When the Round 2 invitation becomes due (15 min after Round 1 ends).
+    // When the Round 2 invitation becomes due (online exams: 15 min after Round 1
+    // ends; offline exams: 10 min after the admin presses "Send Round 2 mail").
     round2EmailDueAt: { type: Date },
     round2Completed: { type: Boolean, default: false },
     // ---- Round 2 server-side timer (Campus and Online mode) ----

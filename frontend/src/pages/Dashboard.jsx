@@ -41,6 +41,7 @@ export default function Dashboard() {
   const [timeLeft, setTimeLeft] = useState(30 * 60);
   const [submitting, setSubmitting] = useState(false);
   const [calcDisplay, setCalcDisplay] = useState("0");
+  const personalTimerRef = useRef(false); // true once an offline exam set the timer
   const examEndRef = useRef(null); // scheduled exam end time (ms), if known
   // true for an "online" exam (candidate may finish early); false for a
   // "campus" exam, where Complete stays locked until the end time.
@@ -64,7 +65,8 @@ export default function Dashboard() {
     ExamAPI.getSettings()
       .then((s) => {
         const mins = Number(s?.round1DurationMinutes) || 30;
-        setTimeLeft(mins * 60);
+        // An offline exam sets its own timer from the candidate's personal end time (below).
+        if (!personalTimerRef.current) setTimeLeft(mins * 60);
       })
       .catch(() => { /* keep default 30-min fallback on failure */ });
 
@@ -108,10 +110,19 @@ export default function Dashboard() {
     if (!ready) return;
     const examId = localStorage.getItem("examId");
     if (!examId) return;
+    const fetchedAt = Date.now();
     ExamAPI.getPublicExamInfo(examId)
       .then((e) => {
         if (e && e.endTime) examEndRef.current = new Date(e.endTime).getTime();
         setEarlySubmitAllowed(!!e && e.examMode === "online");
+        // Offline exam: the timer runs to THIS candidate's own end time (start +
+        // the full duration of all question sets). Worked out from the server
+        // clock, so a reload or a wrong computer clock cannot change it.
+        if (e && e.personal && e.endTime && e.serverTime) {
+          personalTimerRef.current = true;
+          const serverNow = new Date(e.serverTime).getTime() + (Date.now() - fetchedAt);
+          setTimeLeft(Math.max(0, Math.round((new Date(e.endTime).getTime() - serverNow) / 1000)));
+        }
       })
       .catch(() => { /* no deadline info -> plain duration timer */ });
   }, [ready]);

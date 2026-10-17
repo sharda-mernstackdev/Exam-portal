@@ -106,6 +106,11 @@ const ExamAPI = {
   // ---- Students ----
   adminGetStudents: () => request("/admin/students", { auth: "admin" }),
   adminGetCandidateJourney: () => request("/admin/candidate-journey", { auth: "admin" }),
+  // Results Report buttons: mail the Round 2 invitation to candidates who passed Round 1.
+  // payload (all optional): { examId, studentIds }
+  adminSendRound2Emails: (payload) => request("/admin/round2/send-emails", { method: "POST", auth: "admin", body: payload || {} }),
+  // Results Report buttons: mail the HR-round invitation to candidates who passed Round 2.
+  adminSendFinalEmails: (payload) => request("/admin/final/send-emails", { method: "POST", auth: "admin", body: payload || {} }),
   adminClearStudents: () => request("/admin/students", { method: "DELETE", auth: "admin" }),
 
   // ---- Proctoring ----
@@ -113,7 +118,23 @@ const ExamAPI = {
 
   // ---- Scheduled exam registration / timed access (public, no auth) ----
   getCurrentRegistrationExam: () => request(`/exams/current-registration`),
-  getPublicExamInfo: (examId) => request(`/exams/${examId}/public`),
+  getPublicExamInfo: (examId) =>
+    request(`/exams/${examId}/public`).then((info) => {
+      // Offline exam: this candidate's OWN start / end time and duration (saved when
+      // they entered) replace the exam-wide times, so the waiting screen and the
+      // timer follow their personal start.
+      try {
+        const p = JSON.parse(localStorage.getItem("examPersonal") || "null");
+        if (p && String(p.examId) === String(examId) && info.examMode === "campus") {
+          return { ...info, startTime: p.startTime, endTime: p.endTime, durationMinutes: p.durationMinutes, personal: true };
+        }
+      } catch (e) { /* ignore */ }
+      return info;
+    }),
+  // Offline exam (own web address): info page, entry (name+email+mobile+code) and Round 2 login.
+  offlineExamInfo: (slug) => request(`/campus/${encodeURIComponent(slug)}`),
+  campusEntry: (slug, payload) => request(`/campus/${encodeURIComponent(slug)}/entry`, { method: "POST", body: payload }),
+  campusRound2Login: (slug, payload) => request(`/campus/${encodeURIComponent(slug)}/round2`, { method: "POST", body: payload }),
   registerForExam: (examId, payload) => request(`/exams/${examId}/register`, { method: "POST", body: payload }),
   verifyExamAccess: (examId, payload) => request(`/exams/${examId}/access`, { method: "POST", body: payload }),
   adminGetExamAssignments: (examId) => request(`/admin/exams/${examId}/assignments`, { auth: "admin" }),

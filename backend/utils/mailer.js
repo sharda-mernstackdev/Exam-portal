@@ -75,31 +75,14 @@ function wrapTemplate(title, bodyHtml) {
   </div>`;
 }
 
-// `examSlug` (offline exams only): the Round 2 link is then the exam's own
-// address, <site>/<examSlug>/round-2, instead of the general Round 2 page.
-async function sendRound2InvitationEmail(student, round2AccessCode, window, examSlug) {
-  const baseUrl = getBaseUrl();
-  const path = examSlug ? `/${examSlug}/round-2` : '/round2-login';
-  const link = `${baseUrl}${path}?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2AccessCode)}`;
-  const windowRow = (window && window.startTime && window.endTime)
-    ? `<tr><td style="padding: 8px 0; color: #64748b;">Login window</td><td style="padding: 8px 0; text-align: right; font-weight: bold; color: #b91c1c;">${formatTime(window.startTime)} – ${formatTime(window.endTime)}</td></tr>`
-    : '';
-  const windowNote = (window && window.startTime && window.endTime)
-    ? `<p style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px 16px; color: #991b1b;">
-         <strong>Important:</strong> you must log in to Round 2 within the window shown above. Access will not be available after this window closes.
-       </p>`
-    : '';
+// Round 2 mail: only the congratulation message - no link, no access code,
+// no login window. (The admin gives the Round 2 address / code separately.)
+// The extra arguments are kept so existing callers keep working.
+async function sendRound2InvitationEmail(student) {
   const html = wrapTemplate('Congratulations! You have qualified for Round 2', `
     <p>Dear ${student.fullName},</p>
     <p>Congratulations — you have successfully cleared <strong>Round 1</strong> of the assessment and are now eligible for <strong>Round 2</strong>.</p>
-    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-      <tr><td style="padding: 8px 0; color: #64748b;">Round 2 link</td><td style="padding: 8px 0; text-align: right;"><a href="${link}">${link}</a></td></tr>
-      <tr><td style="padding: 8px 0; color: #64748b;">Registered email</td><td style="padding: 8px 0; text-align: right; font-weight: bold;">${student.email}</td></tr>
-      <tr><td style="padding: 8px 0; color: #64748b;">Round 2 access code</td><td style="padding: 8px 0; text-align: right; font-weight: bold; letter-spacing: 1px;">${round2AccessCode}</td></tr>
-      ${windowRow}
-    </table>
-    ${windowNote}
-    <p>Please open the link above and sign in with your registered email and the access code shown, then complete the on-screen system check (camera and fullscreen) before starting the Round 2 assessment.</p>
+    <p>Further details about Round 2 will be shared with you by your exam administrator.</p>
   `);
   return sendMail({ to: student.email, subject: 'Congratulations! You have qualified for Round 2', html });
 }

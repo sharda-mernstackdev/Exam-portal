@@ -3,6 +3,7 @@ import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
 import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV } from "./codingQuestionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
+import Round2OfflineLinks from "./Round2OfflineLinks";
 
 const EMPTY_CQ_FORM = {
   title: "", difficulty: "Medium", description: "", correctOutput: "",
@@ -312,6 +313,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     <section className="page-section active">
       <div className="section-heading">Exam - Round 2 (Technical/Coding)</div>
       <div className="section-sub">Manage test cases, coding questions, and eligible candidates</div>
+            <Round2OfflineLinks />
 
       <div className="card-box" id="round2ExamFormAnchor">
         <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>

@@ -139,6 +139,9 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
       .filter((row) => !q || row.name.toLowerCase().includes(q) || row.email.toLowerCase().includes(q));
   }, [journey, filter, search]);
 
+  // Round 1 passed candidates on screen who still need the Round 2 mail.
+  const pendingInView = useMemo(() => filtered.filter(isRound2MailPending), [filtered]);
+
   const counts = useMemo(() => {
     const c = { r1Passed: 0, r1Failed: 0, r2Passed: 0, r2Failed: 0, clearedBoth: 0 };
     journey.forEach((r) => {
@@ -248,7 +251,14 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
             <h6>Candidate Journey <span className="badge-pill attempted">{filtered.length}</span></h6>
             <div className="sub mb-0">Round 1 result, Round 2 eligibility/status, and combined final outcome per candidate</div>
           </div>
-          <div className="d-flex gap-2">
+          <div className="d-flex gap-2 flex-wrap">
+            {filter === "r1_passed" && pendingInView.length > 0 && (
+              <button type="button" className="btn btn-sm btn-primary fw-bold" disabled={!!mailBusy}
+                onClick={() => sendMails("round2", { studentIds: pendingInView.map((r) => r.studentId) }, "r1-passed-all", `${pendingInView.length} Round 1 passed candidate(s)`)}>
+                <i className="fa-solid fa-paper-plane me-1"></i>
+                {mailBusy === "r1-passed-all" ? "Please wait..." : `Send mail to all Round 1 passed (${pendingInView.length})`}
+              </button>
+            )}
             <button className="btn btn-sm btn-success fw-bold" onClick={downloadJourneyCsv}>
               <i className="fa-solid fa-file-excel me-1"></i> Download list (Excel)
             </button>
@@ -316,12 +326,6 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
                       )}
                       {r.round2EmailSent && <div className="small text-muted mt-1"><i className="fa-solid fa-envelope-circle-check me-1"></i>Email sent</div>}
                       {isRound2MailScheduled(r) && <div className="small text-muted mt-1"><i className="fa-solid fa-clock me-1"></i>Mail goes at {formatClock(r.round2EmailDueAt)}</div>}
-                      {isRound2MailPending(r) && (
-                        <button type="button" className="btn btn-sm btn-outline-primary mt-1" disabled={!!mailBusy}
-                          onClick={() => sendMails("round2", { studentIds: [r.studentId] }, "row-" + r.studentId, r.name)}>
-                          <i className="fa-solid fa-paper-plane me-1"></i>Send mail
-                        </button>
-                      )}
                     </td>
                     <td className="fw-bold">{r.round2 ? r.round2.score : "-"}</td>
                     <td>{r.round2 ? <StatusBadge status={r.round2.status} /> : <span className="text-muted">-</span>}</td>

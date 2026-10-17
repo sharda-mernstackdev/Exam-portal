@@ -27,6 +27,8 @@ const SecondLevelExamSchema = new mongoose.Schema(
     loginWindowMinutes: { type: Number, default: 0 },
     startDate: { type: Date },
     endDate: { type: Date },
+    // 'online' (default, with the access window) or 'campus' = Offline exam (no window).
+    examMode: { type: String, enum: ['online', 'campus'], default: 'online' },
     active: { type: Boolean, default: true }
   },
   { timestamps: true }

@@ -3,7 +3,6 @@ import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
 import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV } from "./codingQuestionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
-import Round2OfflineLinks from "./Round2OfflineLinks";
 
 const EMPTY_CQ_FORM = {
   title: "", difficulty: "Medium", description: "", correctOutput: "",
@@ -67,9 +66,25 @@ function toFuncName(title) {
   return camel || "solution" + Date.now();
 }
 
-const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulties: ["Medium"], startTime: "", endTime: "", loginWindowMinutes: "0" };
+const FRONTEND_URL = window.location.origin;
+
+const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulties: ["Medium"], startTime: "", endTime: "", loginWindowMinutes: "0", examMode: "online" };
 
 export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsChanged, onCodingQuestionsChanged }) {
+  // Offline exams (Round 1 tests that have their own web address) and the Round 2
+  // access code: shown on the offline Round 2 cards below, so the admin can give
+  // them to the students who passed Round 1.
+  const [offlineExams, setOfflineExams] = useState([]);
+  const [round2Code, setRound2Code] = useState("");
+  useEffect(() => {
+    ExamAPI.adminGetExams()
+      .then((list) => setOfflineExams((list || []).filter((x) => x.examMode === "campus" && x.slug)))
+      .catch(() => { /* nothing to show */ });
+    ExamAPI.adminGetSettings()
+      .then((st) => setRound2Code((st && st.round2AccessCode) || ""))
+      .catch(() => { /* nothing to show */ });
+  }, []);
+
   // ---- Second-level exam config form ----
   const [examForm, setExamForm] = useState(EMPTY_EXAM_FORM);
   const [editingExamId, setEditingExamId] = useState(null);
@@ -93,7 +108,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       difficulties: examLevels(ex).length ? examLevels(ex) : ["Medium"],
       startTime: toDatetimeLocal(ex.startTime),
       endTime: toDatetimeLocal(ex.endTime),
-      loginWindowMinutes: String(ex.loginWindowMinutes || 0)
+      loginWindowMinutes: String(ex.loginWindowMinutes || 0),
+      examMode: ex.examMode || "online"
     });
     document.getElementById("round2ExamFormAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -111,14 +127,18 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     }
     // Keep the levels in Easy -> Hard order; `difficulty` = the first one, for older code.
     const levels = DIFFICULTY_LEVELS.filter((d) => examForm.difficulties.includes(d));
+    const offline = examForm.examMode === "campus";
     const payload = {
       title: examForm.examName.trim(),
       durationMinutes: Number(examForm.duration),
       difficulties: levels,
       difficulty: levels[0],
-      loginWindowMinutes: Math.max(0, Number(examForm.loginWindowMinutes) || 0),
-      startTime: toISTISOString(examForm.startTime) || undefined,
-      endTime: toISTISOString(examForm.endTime) || undefined
+      examMode: examForm.examMode || "online",
+      // An offline exam has no access window: the students enter with their
+      // email + the Round 2 access code at the exam's own Round 2 address.
+      loginWindowMinutes: offline ? 0 : Math.max(0, Number(examForm.loginWindowMinutes) || 0),
+      startTime: offline ? null : (toISTISOString(examForm.startTime) || undefined),
+      endTime: offline ? null : (toISTISOString(examForm.endTime) || undefined)
     };
     const req = editingExamId
       ? ExamAPI.adminUpdateSecondLevelExam(editingExamId, payload)
@@ -313,7 +333,6 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     <section className="page-section active">
       <div className="section-heading">Exam - Round 2 (Technical/Coding)</div>
       <div className="section-sub">Manage test cases, coding questions, and eligible candidates</div>
-            <Round2OfflineLinks />
 
       <div className="card-box" id="round2ExamFormAnchor">
         <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>
@@ -375,7 +394,20 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             </div>
             <div className="form-text">Tick one or more. Candidates get questions from all ticked sets.</div>
           </div>
-
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Exam Mode</label>
+            <select className="form-select" value={examForm.examMode} onChange={(e) => setExamForm({ ...examForm, examMode: e.target.value })}>
+              <option value="online">Online exam</option>
+              <option value="campus">Offline exam (campus drive) — own Round 2 address, no time window</option>
+            </select>
+          </div>
+          {examForm.examMode === "campus" && (
+            <div className="col-md-8 d-flex align-items-end">
+              <div className="small text-muted">Offline exam: no access window needed. Students open the exam's Round 2 address (shown on its card below) and enter their email + the Round 2 access code.</div>
+            </div>
+          )}
+          {examForm.examMode !== "campus" && (
+            <>
           <div className="col-12"><hr className="my-1" /></div>
           <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
           <div className="col-md-4">
@@ -404,6 +436,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
               onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
             <div className="form-text">Candidates can log in this many minutes before "Access Opens" (0 = exactly at Access Opens). Leave the dates blank for always-open access.</div>
           </div>
+            </>
+          )}
           <div className="col-12 d-flex gap-2 flex-wrap">
             <button type="submit" className="btn btn-dark fw-bold px-4">{editingExamId ? "Save Changes" : "Save"}</button>
             {editingExamId && (
@@ -453,7 +487,9 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                     </div>
 
                     <div className="test-card-schedule">
-                      {ex.startTime && ex.endTime ? (
+                      {ex.examMode === "campus" ? (
+                        <span className="text-muted"><i className="fa-solid fa-calendar-xmark me-2"></i>Not scheduled</span>
+                      ) : ex.startTime && ex.endTime ? (
                         <>
                           <i className="fa-solid fa-calendar-days me-2" style={{ color: theme.accent }}></i>
                           {formatDate(ex.startTime)}, {new Date(ex.startTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
@@ -465,14 +501,40 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                       )}
                     </div>
 
+                    <div className="test-card-schedule mt-2">
+                      {ex.examMode === "campus" ? (
+                        <><i className="fa-solid fa-building-columns me-2" style={{ color: theme.accent }}></i>Campus Drive</>
+                      ) : (
+                        <><i className="fa-solid fa-laptop me-2" style={{ color: theme.accent }}></i>Online Exam</>
+                      )}
+                    </div>
+
+                    {ex.examMode === "campus" && (
+                      <div className="mt-2 small">
+                        {offlineExams.length === 0 ? (
+                          <div className="border-top pt-1 mt-1 text-muted">No offline Round 1 exam yet — create one in Exam → Round 1.</div>
+                        ) : offlineExams.map((t) => (
+                          <div key={t._id} className="d-flex justify-content-between gap-2 border-top pt-1 mt-1">
+                            <span className="text-break">Round 2: <b>{FRONTEND_URL}/{t.slug}/round-2</b></span>
+                            <button type="button" className="btn btn-sm btn-outline-primary py-0" onClick={() => navigator.clipboard && navigator.clipboard.writeText(`${FRONTEND_URL}/${t.slug}/round-2`).then(() => alert("Round 2 address copied."))}>Copy</button>
+                          </div>
+                        ))}
+                        <div className="border-top pt-1 mt-1">
+                          Access code: {round2Code ? <b style={{ letterSpacing: 2 }}>{round2Code}</b> : <span className="text-danger">not set — set it in Settings</span>}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="small text-muted mt-1">
                       <i className="fa-regular fa-clock me-2"></i>Created {formatDate(ex.createdAt)}
                     </div>
 
                     <div className="d-flex flex-wrap gap-2 mt-3">
-                      <button type="button" className="btn btn-sm btn-outline-primary" onClick={copyRound2Link}>
-                        <i className="fa-solid fa-link me-1"></i>Copy link
-                      </button>
+                      {ex.examMode !== "campus" && (
+                        <button type="button" className="btn btn-sm btn-outline-primary" onClick={copyRound2Link}>
+                          <i className="fa-solid fa-link me-1"></i>Copy link
+                        </button>
+                      )}
                       <button type="button" className="btn-edit" onClick={() => startEditExam(ex)}>Edit</button>
                       <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => toggleCandidates(ex._id)}>
                         {openCandidatesFor === ex._id ? "Hide registrations" : "View registrations"}

@@ -36,7 +36,7 @@ export default function Round2Login() {
   const autoTriedRef = useRef(false);
   const [googleToken, setGoogleToken] = useState("");
   const [googleReset, setGoogleReset] = useState(0);
-  const needGoogle = true; // the Google email check is always required
+    const needGoogle = false; // no Google sign-in: email + access code only
 
   const [forceManual, setForceManual] = useState(false);
   const prefilledFromLink = !!(searchParams.get("email") && searchParams.get("code")) && !forceManual;

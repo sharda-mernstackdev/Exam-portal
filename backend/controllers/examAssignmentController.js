@@ -7,7 +7,6 @@ const { sendExamInvitationEmail } = require('../utils/mailer');
 const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 const { lateLoginDeadline } = require('../utils/examWindow');
-const { requireRegisteredGoogleEmail } = require('../utils/googleAuth');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -136,9 +135,6 @@ exports.registerForExam = async (req, res) => {
     const email = (req.body.email || '').trim().toLowerCase();
     const phone = (req.body.phone || '').trim();
 
-    // Registration does NOT need a Google sign-in. The email owner is checked
-    // later, when the exam link sent to that email is opened (verifyExamAccess
-    // and round2Login).
     if (!fullName || !NAME_RE.test(fullName)) {
       return res.status(400).json({ message: 'Please enter your full name (letters and spaces only).' });
     }
@@ -234,15 +230,6 @@ exports.verifyExamAccess = async (req, res) => {
     if (accessCode.toUpperCase() !== currentCode) {
       return res.status(401).json({ message: 'Incorrect access code. Please check your invitation email.' });
     }
-
-    // ---- Email ownership check (Google Sign-In) ----
-    // The exam link can be forwarded (WhatsApp, SMS, another person's Chrome).
-    // So opening it is not enough: the person must also be signed in to the
-    // Google account of the REGISTERED email. The email comes from Google's
-    // verified token, never from the link or the form.
-    // HARD check: always required, and refused when it is not configured.
-    const emailCheck = await requireRegisteredGoogleEmail(req.body.googleToken, student.email, 'exam');
-    if (emailCheck) return res.status(emailCheck.status).json(emailCheck.body);
 
     if (assignment.status === 'Completed') {
       return res.status(409).json({ message: 'You have already completed this exam.' });

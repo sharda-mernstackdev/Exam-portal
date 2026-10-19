@@ -8,7 +8,6 @@ const Exam = require('../models/Exam');
 const ExamAssignment = require('../models/ExamAssignment');
 const { startRoundSession } = require('../utils/session');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
-const { requireRegisteredGoogleEmail } = require('../utils/googleAuth');
 
 const NAME_RE = /^[a-zA-Z\s]+$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -93,13 +92,6 @@ exports.round2Login = async (req, res) => {
     if (round2AccessCode.toUpperCase() !== validCode.toUpperCase()) {
       return res.status(401).json({ message: 'Incorrect Round 2 access code. Please check your invitation email.' });
     }
-
-    // ---- Email ownership check (Google Sign-In) ----
-    // A forwarded Round 2 link must not work for anyone else: the person has
-    // to be signed in to the Google account of the registered email.
-    // HARD check: always required, and refused when it is not configured.
-    const emailCheck = await requireRegisteredGoogleEmail(req.body.googleToken, student.email, 'Round 2');
-    if (emailCheck) return res.status(emailCheck.status).json(emailCheck.body);
 
     // ---- Round 2 access-window enforcement ----
     // If the admin has scheduled a Round 2 window (e.g. "Round 1 ends 5:35,

@@ -21,9 +21,11 @@ function getBaseUrl() {
   }
 }
 
-// True when the server has the SMTP settings it needs to send mail.
+// True when the server has what it needs to send mail: either a Brevo API key
+// (works over normal HTTPS, so it is not blocked by hosts that close SMTP
+// ports) or the SMTP settings.
 function isMailConfigured() {
-  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+  return !!(process.env.BREVO_API_KEY || (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD));
 }
 
 function getTransporter() {
@@ -35,18 +37,57 @@ function getTransporter() {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT) || 587,
     secure: Number(process.env.SMTP_PORT) === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD }
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    // Fail fast (instead of hanging for minutes) when the host blocks the SMTP port.
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000
   });
   return transporter;
 }
 
+// "Name <a@b.com>" or "a@b.com" -> { name, email }
+function parseSender() {
+  const raw = String(process.env.EMAIL_FROM || process.env.SMTP_USER || '').trim();
+  const m = raw.match(/^(.*)<([^>]+)>$/);
+  if (m) return { name: m[1].trim().replace(/^"|"$/g, '') || 'Online Exam Portal', email: m[2].trim() };
+  return { name: 'Online Exam Portal', email: raw };
+}
+
+// Sends through Brevo's HTTPS API (BREVO_API_KEY). The sender e-mail
+// (EMAIL_FROM) must be a verified sender in the Brevo account.
+async function sendViaBrevo({ to, subject, html }) {
+  const sender = parseSender();
+  if (!sender.email) return { sent: false, reason: 'EMAIL_FROM is not set (needed as the Brevo sender)' };
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ sender, to: [{ email: to }], subject, htmlContent: html })
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { sent: false, reason: `Brevo ${res.status}: ${text.slice(0, 300)}` };
+  }
+  return { sent: true };
+}
+
 /**
- * sendMail({ to, subject, html }) — best-effort. If SMTP isn't configured in
- * .env, logs the email to the console instead of throwing, so the rest of
- * the app (result saving, eligibility flags) keeps working during local
- * development without an email account set up.
+ * sendMail({ to, subject, html }) — best-effort. Uses the Brevo API when
+ * BREVO_API_KEY is set, otherwise SMTP. If neither is configured it logs the
+ * email to the console instead of throwing, so the rest of the app (result
+ * saving, eligibility flags) keeps working during local development.
  */
 async function sendMail({ to, subject, html }) {
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const r = await sendViaBrevo({ to, subject, html });
+      if (!r.sent) console.error('[mailer] send failed (Brevo):', r.reason);
+      return r;
+    } catch (err) {
+      console.error('[mailer] send failed (Brevo):', err.message);
+      return { sent: false, reason: err.message };
+    }
+  }
   const t = getTransporter();
   if (!t) {
     console.log(`[mailer] SMTP not configured — would have sent to ${to}: "${subject}"`);
@@ -54,6 +95,7 @@ async function sendMail({ to, subject, html }) {
   }
   try {
     await t.sendMail({ from: process.env.EMAIL_FROM || process.env.SMTP_USER, to, subject, html });
+    console.log(`[mailer] mail accepted by SMTP for ${to}: "${subject}"`);
     return { sent: true };
   } catch (err) {
     console.error('[mailer] send failed:', err.message);
@@ -75,16 +117,45 @@ function wrapTemplate(title, bodyHtml) {
   </div>`;
 }
 
-// Round 2 mail: only the congratulation message - no link, no access code,
-// no login window. (The admin gives the Round 2 address / code separately.)
-// The extra arguments are kept so existing callers keep working.
-async function sendRound2InvitationEmail(student) {
-  const html = wrapTemplate('Congratulations! You have qualified for Round 2', `
+// Round 2 mail.
+//  - OFFLINE (campus) candidate (`offlineSlug` given): only the congratulation
+//    message - no link, no access code, no login window. The admin gives the
+//    Round 2 address / code separately.
+//  - ONLINE candidate: the congratulation message plus the Round 2 link (with
+//    email + code already filled in), the Round 2 access code and, when the
+//    admin set one, the Round 2 access window. Sent 15 minutes after Round 1
+//    ends by utils/round2Scheduler.js.
+async function sendRound2InvitationEmail(student, round2Code, window, offlineSlug) {
+  const subject = 'Congratulations! You have qualified for Round 2';
+  if (offlineSlug || !round2Code) {
+    const html = wrapTemplate('Congratulations! You have qualified for Round 2', `
     <p>Dear ${student.fullName},</p>
     <p>Congratulations — you have successfully cleared <strong>Round 1</strong> of the assessment and are now eligible for <strong>Round 2</strong>.</p>
     <p>Further details about Round 2 will be shared with you by your exam administrator.</p>
   `);
-  return sendMail({ to: student.email, subject: 'Congratulations! You have qualified for Round 2', html });
+    return sendMail({ to: student.email, subject, html });
+  }
+
+  const link = `${getBaseUrl()}/round2-login?email=${encodeURIComponent(student.email)}&code=${encodeURIComponent(round2Code)}`;
+  const hasWindow = !!(window && window.startTime && window.endTime);
+  const windowRow = hasWindow
+    ? `<tr><td style="padding: 8px 0; color: #64748b;">Access window</td><td style="padding: 8px 0; text-align: right; font-weight: bold; color: #b91c1c;">${formatDateTime(window.startTime)}, ${formatTime(window.startTime)} – ${formatTime(window.endTime)}</td></tr>`
+    : '';
+  const windowNote = hasWindow
+    ? `<p style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px 16px; color: #991b1b;"><strong>Important:</strong> you must log in to Round 2 during the access window shown above. After it closes, login is not possible.</p>`
+    : '';
+  const html = wrapTemplate('Congratulations! You have qualified for Round 2', `
+    <p>Dear ${student.fullName},</p>
+    <p>Congratulations — you have successfully cleared <strong>Round 1</strong> of the assessment and are now eligible for <strong>Round 2</strong> (Technical Assessment).</p>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+      ${windowRow}
+      <tr><td style="padding: 8px 0; color: #64748b;">Round 2 link</td><td style="padding: 8px 0; text-align: right;"><a href="${link}">${link}</a></td></tr>
+      <tr><td style="padding: 8px 0; color: #64748b;">Access code</td><td style="padding: 8px 0; text-align: right; font-weight: bold; letter-spacing: 1px;">${round2Code}</td></tr>
+    </table>
+    ${windowNote}
+    <p>Please ensure a stable internet connection, a working webcam, and a quiet environment before you begin.</p>
+  `);
+  return sendMail({ to: student.email, subject, html });
 }
 
 async function sendFinalSuccessEmail(student) {

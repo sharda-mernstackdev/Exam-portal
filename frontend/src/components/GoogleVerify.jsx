@@ -11,8 +11,8 @@ import { useEffect, useState } from "react";
 //   4. This component then checks the chosen account's email against the
 //      registered email. The server checks it again before the exam starts.
 //
-// VITE_GOOGLE_CLIENT_ID must be set. It is REQUIRED for the exam links: when it
-// is empty an error is shown and the exam cannot be opened.
+// The Google client id comes from the `clientId` prop (the server sends it with
+// the exam info) or, if not given, from VITE_GOOGLE_CLIENT_ID.
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 export const GOOGLE_CALLBACK_PATH = "/google-callback";
 
@@ -67,14 +67,17 @@ export function buildGoogleAuthUrl({ clientId, origin, nonce }) {
 //   onVerified(idToken) - called once the chosen Google account matches
 //   resetKey - change this value to ask for a fresh sign-in (e.g. after the server rejected the token)
 //   returnTo - page to come back to after Google (default: the current address)
-export default function GoogleVerify({ expectedEmail, onVerified, resetKey, returnTo }) {
+//   variant - "box" shows the compact "Sign in with your registered email account" card
+//   clientId - Google client id (optional; falls back to VITE_GOOGLE_CLIENT_ID)
+export default function GoogleVerify({ expectedEmail, onVerified, resetKey, returnTo, variant, clientId }) {
+  const cid = (clientId || GOOGLE_CLIENT_ID || "").trim();
   const [error, setError] = useState("");
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const expected = String(expectedEmail || "").trim().toLowerCase();
 
   // Coming back from Google: pick up the token that /google-callback saved.
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
+    if (!cid) return;
     setVerifiedEmail("");
     const here = window.location.pathname + window.location.search;
 
@@ -118,16 +121,38 @@ export default function GoogleVerify({ expectedEmail, onVerified, resetKey, retu
     drop(KEY_TOKEN);
     drop(KEY_ERR);
     window.location.assign(
-      buildGoogleAuthUrl({ clientId: GOOGLE_CLIENT_ID, origin: window.location.origin, nonce })
+      buildGoogleAuthUrl({ clientId: cid, origin: window.location.origin, nonce })
     );
   }
 
   // Not configured: the exam must NOT open without the email check, so say so
   // clearly (the server refuses the sign-in as well).
-  if (!GOOGLE_CLIENT_ID) {
+  if (!cid) {
     return (
       <div className="alert alert-danger small text-start mb-3">
         <b>Exam sign-in is unavailable.</b> Email verification is not set up for this portal. Please contact the administrator.
+      </div>
+    );
+  }
+
+  if (variant === "box") {
+    return (
+      <div className="mb-3 p-3 rounded-3 border text-start" style={{ background: "#fff" }}>
+        <div className="fw-bold">Sign in with your registered email account</div>
+        {verifiedEmail ? (
+          <div className="small text-success mt-1">
+            <i className="fa-solid fa-circle-check me-1"></i>Email account verified: {verifiedEmail}. Continue during your exam&apos;s login window.
+          </div>
+        ) : (
+          <>
+            <div className="small text-muted mt-1">
+              Use the Google account whose email matches your registration. You can sign in before the login window opens. Your exam still starts at its scheduled time.
+            </div>
+            <button type="button" onClick={signIn} className="btn btn-sm btn-outline-primary mt-2">Sign in with Google</button>
+          </>
+        )}
+        {error && <div className="text-danger small mt-2">{error}</div>}
+        <div className="mt-2"><a href="/privacy-policy" target="_blank" rel="noreferrer" className="small">Privacy notice</a></div>
       </div>
     );
   }

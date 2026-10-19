@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import LiveClock from "../components/LiveClock";
 import ExamAPI from "../api";
+import GoogleVerify, { GOOGLE_CLIENT_ID } from "../components/GoogleVerify";
 
 function formatDate(d) {
   if (!d) return "-";
@@ -40,6 +41,11 @@ export default function ExamAccessGate() {
   const [loadError, setLoadError] = useState("");
   const [starting, setStarting] = useState(false);
   const [accessError, setAccessError] = useState("");
+  const [googleToken, setGoogleToken] = useState("");
+  const [googleReset, setGoogleReset] = useState(0);
+  // Email check is on whenever Google sign-in is configured (on the server or in the frontend env).
+  const googleClientId = (exam && exam.googleClientId) || GOOGLE_CLIENT_ID || "";
+  const needGoogle = !!googleClientId;
 
   useEffect(() => {
     ExamAPI.getPublicExamInfo(examId)
@@ -48,9 +54,13 @@ export default function ExamAccessGate() {
   }, [examId]);
 
   function handleStart() {
+    if (needGoogle && !googleToken) {
+      setAccessError("Please sign in with your registered Google account first.");
+      return;
+    }
     setStarting(true);
     setAccessError("");
-    ExamAPI.verifyExamAccess(examId, { email, accessCode: code, deviceId: getDeviceId() })
+    ExamAPI.verifyExamAccess(examId, { email, accessCode: code, deviceId: getDeviceId(), googleToken: googleToken || undefined })
       .then((data) => {
         localStorage.setItem("studentToken", data.token);
         localStorage.setItem("candidateName", data.student.fullName);
@@ -64,6 +74,11 @@ export default function ExamAccessGate() {
       })
       .catch((err) => {
         setStarting(false);
+        if (err.data && err.data.googleError) {
+          // Google sign-in rejected / expired: ask for a fresh one.
+          setGoogleToken("");
+          setGoogleReset((n) => n + 1);
+        }
         setAccessError(err.message || "Could not verify exam access. Please try again.");
       });
   }
@@ -124,23 +139,28 @@ export default function ExamAccessGate() {
             <div className="alert alert-danger small">{accessError}</div>
           )}
 
-          <table className="table table-borderless small mb-4">
-            <tbody>
-              <tr><td className="text-secondary">Email</td><td className="text-end fw-bold">{email || "-"}</td></tr>
-              <tr><td className="text-secondary">Access code</td><td className="text-end fw-bold" style={{ letterSpacing: 1 }}>{code || "-"}</td></tr>
-              <tr><td className="text-secondary">Exam date</td><td className="text-end">{formatDate(exam.examDate)}</td></tr>
-              <tr><td className="text-secondary">Exam time</td><td className="text-end">{formatTime(exam.startTime)} – {formatTime(exam.endTime)}</td></tr>
-            </tbody>
-          </table>
+          <>
+              <table className="table table-borderless small mb-4">
+                <tbody>
+                  <tr><td className="text-secondary">Email</td><td className="text-end fw-bold">{email || "-"}</td></tr>
+                  <tr><td className="text-secondary">Access code</td><td className="text-end fw-bold" style={{ letterSpacing: 1 }}>{code || "-"}</td></tr>
+                  <tr><td className="text-secondary">Exam date</td><td className="text-end">{formatDate(exam.examDate)}</td></tr>
+                  <tr><td className="text-secondary">Exam time</td><td className="text-end">{formatTime(exam.startTime)} – {formatTime(exam.endTime)}</td></tr>
+                </tbody>
+              </table>
 
-          <button type="button" disabled={starting} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
-            {starting ? (
-              <><i className="fa-solid fa-spinner fa-spin me-2"></i>Verifying...</>
-            ) : (
-              <><i className="fa-solid fa-right-to-bracket me-2"></i>Start Exam</>
-            )}
-          </button>
+              {needGoogle && (
+                <GoogleVerify variant="box" clientId={googleClientId} expectedEmail={email} resetKey={googleReset} onVerified={setGoogleToken} />
+              )}
 
+              <button type="button" disabled={starting || (needGoogle && !googleToken)} onClick={handleStart} className="btn w-100 fw-bold" style={{ backgroundColor: "#2a5298", color: "#fff", padding: 12, borderRadius: 8 }}>
+                {starting ? (
+                  <><i className="fa-solid fa-spinner fa-spin me-2"></i>Verifying...</>
+                ) : (
+                  <><i className="fa-solid fa-right-to-bracket me-2"></i>Start Exam</>
+                )}
+              </button>
+          </>
           <div className="text-center small text-muted mt-3">
             Need help? Contact your exam administrator.
           </div>

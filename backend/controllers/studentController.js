@@ -2,15 +2,31 @@ const Student = require('../models/Student');
 const Submission = require('../models/Submission');
 const SecondLevelResult = require('../models/SecondLevelResult');
 const ExamAssignment = require('../models/ExamAssignment');
+const ProctorLog = require('../models/ProctorLog');
 const { scheduleRound2Mails, sendFinalMailsNow } = require('../utils/round2Manual');
 const { isMailConfigured } = require('../utils/mailer');
 
 // GET /api/admin/students — "Registered Students" tab in admin dashboard
 exports.listStudents = async (req, res) => {
   const students = await Student.find({}, '-passwordHash').sort({ registeredAt: -1 }).lean();
-  // Which students are registered for a Round 1 exam (have a Round 1 assignment).
-  const r1Ids = new Set((await ExamAssignment.find({ round: 1 }, 'student').lean()).map((a) => String(a.student)));
-  res.json(students.map((s) => ({ ...s, round1Registered: r1Ids.has(String(s._id)) })));
+  // The latest Round 1 registration of each student: tells whether they are
+  // registered for a Round 1 exam and whether that exam is Online or Offline
+  // (campus drive), plus the exam name.
+  const r1Assignments = await ExamAssignment.find({ round: 1 }).sort({ updatedAt: -1 }).populate('exam', 'title').lean();
+  const r1ByStudent = new Map();
+  r1Assignments.forEach((a) => {
+    const key = String(a.student);
+    if (!r1ByStudent.has(key)) r1ByStudent.set(key, a); // newest first
+  });
+  res.json(students.map((s) => {
+    const a = r1ByStudent.get(String(s._id));
+    return {
+      ...s,
+      round1Registered: !!a,
+      entryMode: a ? (a.entryMode === 'campus' ? 'campus' : 'online') : '',
+      examTitle: a && a.exam ? a.exam.title : ''
+    };
+  }));
 };
 
 // DELETE /api/admin/students — clear all registered students (matches old
@@ -20,10 +36,19 @@ exports.clearStudents = async (req, res) => {
   res.json({ message: 'All registered students cleared.' });
 };
 
-// DELETE /api/admin/students/:id
+// DELETE /api/admin/students/:id — removes ONE candidate together with
+// everything that belongs to that candidate (exam registrations, Round 1 and
+// Round 2 results, proctoring logs), so nothing is left behind in the lists
+// and the same person can register again from scratch.
 exports.deleteStudent = async (req, res) => {
   const student = await Student.findByIdAndDelete(req.params.id);
   if (!student) return res.status(404).json({ message: 'Student not found.' });
+  await Promise.all([
+    ExamAssignment.deleteMany({ student: student._id }),
+    Submission.deleteMany({ student: student._id }),
+    SecondLevelResult.deleteMany({ student: student._id }),
+    ProctorLog.deleteMany({ student: student._id })
+  ]);
   res.json({ message: 'Student deleted.' });
 };
 

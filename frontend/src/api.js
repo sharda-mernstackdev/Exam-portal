@@ -112,6 +112,7 @@ const ExamAPI = {
   // Results Report buttons: mail the HR-round invitation to candidates who passed Round 2.
   adminSendFinalEmails: (payload) => request("/admin/final/send-emails", { method: "POST", auth: "admin", body: payload || {} }),
   adminClearStudents: () => request("/admin/students", { method: "DELETE", auth: "admin" }),
+  adminDeleteStudent: (id) => request("/admin/students/" + id, { method: "DELETE", auth: "admin" }),
 
   // ---- Proctoring ----
   logProctorEvent: (payload) => request("/proctor-log", { method: "POST", auth: "student", body: payload }),

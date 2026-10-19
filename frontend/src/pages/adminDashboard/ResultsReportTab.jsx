@@ -22,6 +22,30 @@ const FINAL_STATUS_LABEL = {
   CLEARED_BOTH: "Cleared Both Rounds"
 };
 
+// How the candidate took Round 1: "campus" = Offline (campus drive), "online"
+// = Online exam, "" = no exam registration yet.
+function modeOf(row) {
+  if (row.entryMode === "campus") return "offline";
+  if (row.entryMode === "online") return "online";
+  return "";
+}
+
+function ModeBadge({ mode }) {
+  if (mode === "offline") {
+    return <span className="badge-pill" style={{ background: "#ccfbf1", color: "#0f766e" }}><i className="fa-solid fa-building-columns me-1"></i>Offline</span>;
+  }
+  if (mode === "online") {
+    return <span className="badge-pill" style={{ background: "#e0e3ff", color: "#3730a3" }}><i className="fa-solid fa-laptop me-1"></i>Online</span>;
+  }
+  return <span className="text-muted small">-</span>;
+}
+
+const MODE_TABS = [
+  { key: "all", label: "All", icon: "fa-users" },
+  { key: "online", label: "Online", icon: "fa-laptop" },
+  { key: "offline", label: "Offline", icon: "fa-building-columns" }
+];
+
 function StatusBadge({ status }) {
   const map = {
     PASS: { cls: "pass", text: "PASSED" },
@@ -130,18 +154,40 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
   }
 
   const [filter, setFilter] = useState("all");
+  const [modeFilter, setModeFilter] = useState("all");
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return journey
+      .filter((row) => modeFilter === "all" || modeOf(row) === modeFilter)
       .filter((row) => matchesFilter(row, filter))
       .filter((row) => !q || row.name.toLowerCase().includes(q) || row.email.toLowerCase().includes(q));
-  }, [journey, filter, search]);
+  }, [journey, filter, modeFilter, search]);
 
-  // Round 1 passed candidates on screen who still need the Round 2 mail.
-  const pendingInView = useMemo(() => filtered.filter(isRound2MailPending), [filtered]);
+  // Per-mode summary (Online / Offline), shown above the table.
+  const modeStats = useMemo(() => {
+    const blank = () => ({ total: 0, r1Passed: 0, r1Failed: 0, mailSent: 0, mailWaiting: 0 });
+    const st = { online: blank(), offline: blank() };
+    journey.forEach((r) => {
+      const m = modeOf(r);
+      if (!m) return;
+      st[m].total++;
+      if (r.round1?.status === "PASS") {
+        st[m].r1Passed++;
+        if (r.round2EmailSent) st[m].mailSent++;
+        else st[m].mailWaiting++;
+      }
+      if (r.round1?.status === "FAIL") st[m].r1Failed++;
+    });
+    return st;
+  }, [journey]);
 
+  const modeCounts = { all: journey.length, online: modeStats.online.total, offline: modeStats.offline.total };
+
+  // OFFLINE candidates who passed Round 1 and still need the Round 2 mail
+  // (online candidates get it automatically, so they are never in this list).
+  const offlinePending = useMemo(() => journey.filter((r) => modeOf(r) === "offline" && isRound2MailPending(r)), [journey]);
   const counts = useMemo(() => {
     const c = { r1Passed: 0, r1Failed: 0, r2Passed: 0, r2Failed: 0, clearedBoth: 0 };
     journey.forEach((r) => {
@@ -158,9 +204,10 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
   function downloadJourneyCsv() {
     downloadCsv(
       "candidate-list.csv",
-      ["Name", "Email", "Mobile", "Exam", "R1 Score", "R1 %", "R1 Status", "Round 2 Eligible", "R2 Score", "R2 Status", "Final Status"],
+      ["Name", "Email", "Mobile", "Exam", "Mode", "R1 Score", "R1 %", "R1 Status", "Round 2 Eligible", "R2 Score", "R2 Status", "Final Status"],
       filtered.map((r) => [
         r.name, r.email, r.phone || "", r.examTitle || "",
+        modeOf(r) === "offline" ? "Offline" : modeOf(r) === "online" ? "Online" : "",
         r.round1 ? `${r.round1.score} / ${r.round1.total}` : "", r.round1 ? r.round1.percentage : "", r.round1 ? r.round1.status : "",
         r.round2Eligible ? "Yes" : "No",
         r.round2 ? r.round2.score : "", r.round2 ? r.round2.status : "",
@@ -171,19 +218,20 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
 
   function downloadJourneyPdf() {
     const doc = createPdfDoc();
-    pdfTitle(doc, "Candidate Journey Report", `${FILTERS.find((f) => f.key === filter)?.label || "All Candidates"} — generated ${new Date().toLocaleString()}`);
+    pdfTitle(doc, "Candidate Journey Report", `${MODE_TABS.find((t) => t.key === modeFilter)?.label || "All"} · ${FILTERS.find((f) => f.key === filter)?.label || "All Candidates"} — generated ${new Date().toLocaleString()}`);
     pdfTable(
       doc,
-      ["Candidate", "Email", "R1 %", "R1 Status", "R2 Eligible", "R2 %", "R2 Status", "Final Status"],
+      ["Candidate", "Email", "Mode", "R1 %", "R1 Status", "R2 Eligible", "R2 %", "R2 Status", "Final Status"],
       filtered.length
         ? filtered.map((r) => [
             r.name, r.email,
+            modeOf(r) === "offline" ? "Offline" : modeOf(r) === "online" ? "Online" : "-",
             r.round1 ? r.round1.percentage + "%" : "-", r.round1 ? r.round1.status : "-",
             r.round2Eligible ? "Yes" : "No",
             r.round2 ? r.round2.score : "-", r.round2 ? r.round2.status : "-",
             FINAL_STATUS_LABEL[r.finalStatus] || r.finalStatus
           ])
-        : [["No candidates match this filter", "-", "-", "-", "-", "-", "-", "-"]]
+        : [["No candidates match this filter", "-", "-", "-", "-", "-", "-", "-", "-"]]
     );
     doc.save("candidate-journey-report.pdf");
   }
@@ -217,9 +265,13 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
           after you press the button; the HR round mail is sent right away. A button for an exam covers every batch of that
           exam, however many times it was held.
         </div>
+        <div className="small mb-3 p-2 rounded-2" style={{ background: "#f1f5f9" }}>
+          <i className="fa-solid fa-laptop me-1" style={{ color: "#3730a3" }}></i><b>Online candidates</b> get the Round 2 mail automatically, 15 minutes after Round 1 ends.
+          {" "}<i className="fa-solid fa-building-columns ms-2 me-1" style={{ color: "#0f766e" }}></i><b>Offline candidates</b> get it only when you press the button below.
+        </div>
 
         {[
-          { kind: "round2", title: "Round 2 mail — candidates who passed Round 1", groups: round2Groups, total: round2Total, btn: "Send to all who passed Round 1" },
+          { kind: "round2", title: "Round 2 mail (Offline candidates) — passed Round 1", groups: round2Groups, total: round2Total, btn: "Send to all who passed Round 1" },
           { kind: "final", title: "HR round mail — candidates who passed Round 2", groups: finalGroups, total: finalTotal, btn: "Send to all who passed Round 2" }
         ].map((m) => (
           <div key={m.kind} className="mb-3">
@@ -252,11 +304,12 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
             <div className="sub mb-0">Round 1 result, Round 2 eligibility/status, and combined final outcome per candidate</div>
           </div>
           <div className="d-flex gap-2 flex-wrap">
-            {filter === "r1_passed" && pendingInView.length > 0 && (
+            {offlinePending.length > 0 && (
               <button type="button" className="btn btn-sm btn-primary fw-bold" disabled={!!mailBusy}
-                onClick={() => sendMails("round2", { studentIds: pendingInView.map((r) => r.studentId) }, "r1-passed-all", `${pendingInView.length} Round 1 passed candidate(s)`)}>
+                title="Sends the Round 2 mail (10 minutes after you confirm) to every Offline candidate who passed Round 1"
+                onClick={() => sendMails("round2", { studentIds: offlinePending.map((r) => r.studentId) }, "offline-pass-all", `${offlinePending.length} Offline candidate(s) who passed Round 1`)}>
                 <i className="fa-solid fa-paper-plane me-1"></i>
-                {mailBusy === "r1-passed-all" ? "Please wait..." : `Send mail to all Round 1 passed (${pendingInView.length})`}
+                {mailBusy === "offline-pass-all" ? "Please wait..." : `Send Round 2 mail to Offline passed (${offlinePending.length})`}
               </button>
             )}
             <button className="btn btn-sm btn-success fw-bold" onClick={downloadJourneyCsv}>
@@ -266,6 +319,45 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
               <i className="fa-solid fa-file-pdf me-1"></i> Download PDF
             </button>
           </div>
+        </div>
+
+        <div className="row g-3 mb-3">
+          {[
+            { key: "online", title: "Online candidates", icon: "fa-laptop", color: "#4f46e5", text: "#3730a3", note: "Round 2 mail: automatic" },
+            { key: "offline", title: "Offline candidates", icon: "fa-building-columns", color: "#0d9488", text: "#0f766e", note: "Round 2 mail: sent by admin" }
+          ].map((m) => {
+            const st = modeStats[m.key];
+            return (
+              <div className="col-md-6" key={m.key}>
+                <div className="p-3 rounded-3 border bg-white h-100" style={{ borderLeft: `5px solid ${m.color}` }}>
+                  <div className="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                    <div className="fw-bold" style={{ color: m.text }}><i className={`fa-solid ${m.icon} me-2`}></i>{m.title}</div>
+                    <span className="small text-muted">{m.note}</span>
+                  </div>
+                  <div className="d-flex gap-3 flex-wrap mt-2">
+                    <div><div className="fs-5 fw-bold">{st.total}</div><div className="small text-muted">Total</div></div>
+                    <div><div className="fs-5 fw-bold text-success">{st.r1Passed}</div><div className="small text-muted">R1 passed</div></div>
+                    <div><div className="fs-5 fw-bold text-danger">{st.r1Failed}</div><div className="small text-muted">R1 failed</div></div>
+                    <div><div className="fs-5 fw-bold" style={{ color: m.text }}>{st.mailSent}</div><div className="small text-muted">Round 2 mail sent</div></div>
+                    <div><div className="fs-5 fw-bold text-secondary">{st.mailWaiting}</div><div className="small text-muted">{m.key === "online" ? "Mail due / scheduled" : "Waiting for you"}</div></div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="d-flex flex-wrap gap-2 mb-2">
+          {MODE_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className={`btn btn-sm fw-bold ${modeFilter === t.key ? "btn-primary" : "btn-outline-primary"}`}
+              onClick={() => setModeFilter(t.key)}
+            >
+              <i className={`fa-solid ${t.icon} me-1`}></i>{t.label} ({modeCounts[t.key]})
+            </button>
+          ))}
         </div>
 
         <div className="d-flex flex-wrap gap-2 mb-3">
@@ -297,6 +389,7 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
               <thead>
                 <tr>
                   <th>Candidate</th>
+                  <th>Mode</th>
                   <th>R1 Score</th>
                   <th>R1 %</th>
                   <th>R1 Status</th>
@@ -315,6 +408,7 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
                       <div className="small text-muted">{r.email}</div>
                       {r.examTitle && <div className="small text-muted">{r.examTitle}</div>}
                     </td>
+                    <td><ModeBadge mode={modeOf(r)} /></td>
                     <td>{r.round1 ? `${r.round1.score} / ${r.round1.total}` : "-"}</td>
                     <td className="fw-bold">{r.round1 ? r.round1.percentage + "%" : "-"}</td>
                     <td>{r.round1 ? <StatusBadge status={r.round1.status} /> : <span className="text-muted">-</span>}</td>
@@ -326,6 +420,11 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
                       )}
                       {r.round2EmailSent && <div className="small text-muted mt-1"><i className="fa-solid fa-envelope-circle-check me-1"></i>Email sent</div>}
                       {isRound2MailScheduled(r) && <div className="small text-muted mt-1"><i className="fa-solid fa-clock me-1"></i>Mail goes at {formatClock(r.round2EmailDueAt)}</div>}
+                      {r.round2Eligible && !r.round2EmailSent && !r.round2EmailDueAt && (
+                        modeOf(r) === "offline"
+                          ? <div className="small text-muted mt-1"><i className="fa-regular fa-hourglass-half me-1"></i>Waiting for admin mail</div>
+                          : <div className="small text-muted mt-1"><i className="fa-solid fa-robot me-1"></i>Automatic mail</div>
+                      )}
                     </td>
                     <td className="fw-bold">{r.round2 ? r.round2.score : "-"}</td>
                     <td>{r.round2 ? <StatusBadge status={r.round2.status} /> : <span className="text-muted">-</span>}</td>

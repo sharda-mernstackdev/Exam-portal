@@ -10,8 +10,8 @@ import { isMobileDevice } from "./utils/device";
 // Set VITE_API_URL (e.g. https://your-backend.example.com/api) in the
 // frontend's .env / hosting dashboard for the live site; localhost is only
 // the fallback for local development.
-// const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
+// const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 function studentToken() {
   return localStorage.getItem("studentToken") || "";

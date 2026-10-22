@@ -12,6 +12,30 @@ const MP_BUNDLE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER
 const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
 const MP_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const OD_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite";
+
+let objectDetectorPromise = null;
+function loadObjectDetector() {
+  if (!objectDetectorPromise) {
+    objectDetectorPromise = import(/* @vite-ignore */ MP_BUNDLE)
+      .then(async (mod) => {
+        const fileset = await mod.FilesetResolver.forVisionTasks(MP_WASM);
+        return mod.ObjectDetector.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: OD_MODEL },
+          runningMode: "VIDEO",
+          scoreThreshold: 0.35,
+          maxResults: 5,
+          categoryAllowlist: ["cell phone"]
+        });
+      })
+      .catch((e) => {
+        objectDetectorPromise = null;
+        throw e;
+      });
+  }
+  return objectDetectorPromise;
+}
 
 let landmarkerPromise = null;
 function loadLandmarker() {
@@ -85,6 +109,12 @@ function logEvent(type, detail, flash) {
  * options.voice (default false): also listen to the microphone and show a red
  *   note under the camera box when background voice / noise is heard. It never
  *   ends the exam. If the microphone is not allowed the exam carries on.
+ * options.faceCheck (default = options.warnings): analyse the face (not visible /
+ *   looking away / another person) and show the red note + log it. Without
+ *   options.warnings this never counts a warning and never ends the exam
+ *   (used for offline / campus exams).
+ * options.phone (default false): look for a mobile phone in the camera and show
+ *   a red note + log it (never ends the exam).
  * options.quiet (default false): when true no on-screen flash messages are
  *   shown at all; events are only logged.
  * options.warnings (default false): when true (online exams only), face problems
@@ -123,6 +153,10 @@ export function useProctor(active, options) {
   const audioStreamRef = useRef(null);
   const audioCtxRef = useRef(null);
   const voiceTimerRef = useRef(null);
+  const objectDetectorRef = useRef(null);
+  const objectDetectorLoadingRef = useRef(false);
+  const phoneTickRef = useRef(0);
+  const phoneHitsRef = useRef(0);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -371,9 +405,11 @@ export function useProctor(active, options) {
       }
       prevMotionRef.current = new Uint8ClampedArray(px);
 
-      // Face warnings are switched on later (once the exam mode is known), so
-      // the landmark model is loaded the first time warnings are wanted.
-      if (optionsRef.current.warnings && !landmarkerRef.current && !landmarkerLoadingRef.current) {
+      // Face checks are switched on later (once the exam mode is known), so
+      // the landmark model is loaded the first time they are wanted. Offline
+      // (campus) exams use faceCheck without warnings: red note + log only.
+      const faceOn = optionsRef.current.faceCheck !== undefined ? !!optionsRef.current.faceCheck : !!optionsRef.current.warnings;
+      if (faceOn && !landmarkerRef.current && !landmarkerLoadingRef.current) {
         landmarkerLoadingRef.current = true;
         loadLandmarker()
           .then((lm) => {
@@ -382,8 +418,39 @@ export function useProctor(active, options) {
           .catch(() => { /* keep the basic fallback checks */ });
       }
 
+      // Mobile phone in front of the camera (red note + log only).
+      if (optionsRef.current.phone) {
+        if (!objectDetectorRef.current && !objectDetectorLoadingRef.current) {
+          objectDetectorLoadingRef.current = true;
+          loadObjectDetector()
+            .then((od) => {
+              if (!stoppedRef.current) objectDetectorRef.current = od;
+            })
+            .catch(() => { /* phone check stays off if the model cannot load */ });
+        }
+        phoneTickRef.current += 1;
+        if (objectDetectorRef.current && phoneTickRef.current % 2 === 0) {
+          try {
+            const res = objectDetectorRef.current.detectForVideo(video, performance.now());
+            const found = ((res && res.detections) || []).some((d) =>
+              (d.categories || []).some((c) => c.categoryName === "cell phone")
+            );
+            if (found) {
+              phoneHitsRef.current += 1;
+              if (phoneHitsRef.current >= 2) {
+                phoneHitsRef.current = 0;
+                setStatus(false, "Phone detected");
+                logEvent("phone_detected", "Mobile phone detected in front of the camera", flash);
+              }
+            } else {
+              phoneHitsRef.current = 0;
+            }
+          } catch (e) { /* skip this frame */ }
+        }
+      }
+
       // Preferred: MediaPipe face landmarks (works in every modern browser).
-      if (optionsRef.current.warnings && landmarkerRef.current) {
+      if (faceOn && landmarkerRef.current) {
         try {
           const result = landmarkerRef.current.detectForVideo(video, performance.now());
           judgeFaces(result);

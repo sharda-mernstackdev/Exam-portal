@@ -19,7 +19,7 @@ function isMobileDevice() {
 }
 
 const CAM_MESSAGES = {
-  checking: ["Checking your camera...", "Please click Allow when the browser asks for camera permission."],
+  checking: ["Checking your camera...", "Please click Allow when the browser asks for camera and microphone permission."],
   denied: ["Camera permission is blocked", "Allow camera access for this site in the browser (lock icon in the address bar), then click Check Camera Again."],
   nocamera: ["No camera found", "Connect a webcam to this computer, then click Check Camera Again."],
   busy: ["Camera is in use by another app", "Close other apps or tabs using the camera, then click Check Camera Again."],
@@ -112,11 +112,16 @@ export default function SecondLevelExam() {
   const questionsRef = useRef(null);
   const submittedRef = useRef(false);
   const lastViolationAtRef = useRef(0);
+  const permGraceUntilRef = useRef(0); // no violation is counted until this time (ms)
+  const micOkRef = useRef(false);
   const lockdownHandlerRef = useRef(null);
 
   function handleLockdownViolation(kind) {
     if (phaseRef.current !== "exam") return; // don't penalize before the exam starts
     if (submittedRef.current) return;
+     // The browser's microphone permission box can drop fullscreen / blur the
+    // page by itself. That is not the candidate's fault: no violation then.
+    if (Date.now() < permGraceUntilRef.current) return;
     // One qualifying action = one violation (several events can fire for it).
     const now = Date.now();
     if (now - lastViolationAtRef.current < 1500) return;
@@ -212,21 +217,32 @@ export default function SecondLevelExam() {
     }
   }
 
-  function checkCamera() {
+    function checkCamera() {
     stopCamStream();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamStatus("unsupported");
       return;
     }
     setCamStatus("checking");
+    permGraceUntilRef.current = Date.now() + 60000; // while permission boxes are open
     navigator.mediaDevices
       .getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false })
       .then((s) => {
         camStreamRef.current = s;
         s.getVideoTracks().forEach((t) => t.addEventListener("ended", () => setCamStatus("lost")));
-        setCamStatus("ok");
+        // Microphone permission (optional) - asked here, on the start page, so the
+        // browser does not pop up its permission box in the middle of the exam.
+        return navigator.mediaDevices
+          .getUserMedia({ audio: true, video: false })
+          .then((a) => { micOkRef.current = true; a.getTracks().forEach((t) => t.stop()); })
+          .catch(() => { micOkRef.current = false; /* microphone is optional */ })
+          .then(() => {
+            setCamStatus("ok");
+            permGraceUntilRef.current = Date.now() + 4000;
+          });
       })
       .catch((err) => {
+        permGraceUntilRef.current = Date.now() + 4000;
         const name = err && err.name;
         if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") setCamStatus("nocamera");
         else if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") setCamStatus("busy");
@@ -379,6 +395,9 @@ export default function SecondLevelExam() {
     ExamAPI.startSecondLevel()
       .then((t) => {
         applyTiming(t);
+        // If the microphone was not allowed yet, the browser may ask once more
+        // when the exam starts: do not count that as a violation.
+        if (!micOkRef.current) permGraceUntilRef.current = Date.now() + 10000;
         setPhase("exam");
       })
       .catch((err) => {

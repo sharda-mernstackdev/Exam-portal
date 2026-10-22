@@ -55,6 +55,8 @@ export default function Dashboard() {
   //    under the camera box (all exams) — they never end the exam.
   useProctor(ready, {
     warnings: earlySubmitAllowed,
+    faceCheck: true,
+    phone: true,
     voice: true,
     onLimit: () => submitRef.current()
   });

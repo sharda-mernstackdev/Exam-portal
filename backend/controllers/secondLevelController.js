@@ -19,16 +19,8 @@ const {
 //  - one attempt only, atomically (two simultaneous submits cannot both win);
 //  - which questions: every answer must match a question of the Round 2 paper
 //    currently in force (by id, or title); unknown / duplicate ones are dropped;
-//  - the totals: `total` is the real number of test cases of that question in
-//    the database, `passed` is clamped to 0..total, and the overall score is
-//    the SUM of those per-question values - the separate totalScore sent by
-//    the browser is ignored (a mismatch is logged as a violation).
-//
-// Known limit (architecture): candidate code is executed in the candidate's
-// browser, so the number of test cases each solution passed is still reported
-// by the browser. The server cannot re-run it without a sandboxed code judge
-// (a separate execution service); until one exists, a modified browser could
-// over-report `passed` within the 0..total range. See the Bug #4 notes.
+//  - the marks: one mark per correctly answered question, worked out here -
+//    the totalScore sent by the browser is ignored.
 //
 // Online mode: the candidate submits manually (Complete Exam). The server
 // only accepts that while the deadline (set when Begin was pressed, plus a few
@@ -124,8 +116,8 @@ exports.round2Status = (req, res) => timing(req, res, false);
 exports.round2Start = (req, res) => timing(req, res, true);
 
 // PUT /api/second-level/draft
-// The browser auto-saves the candidate's current code (every question, with
-// its own language) while the exam runs. These are "the latest answers the
+// The browser auto-saves the candidate's current answers (every question)
+// while the exam runs. These are "the latest answers the
 // system has received": if the deadline passes without a submission the
 // server finalizes the exam from them.
 //  - only while the attempt is open: after the exam is finalized
@@ -146,13 +138,11 @@ exports.saveSecondLevelDraft = async (req, res) => {
     const answers = input
       .filter((a) => a && a.questionId)
       .map((a) => {
-        let passed = Math.floor(Number(a.passed));
-        if (!Number.isFinite(passed) || passed < 0) passed = 0;
         return {
           questionId: String(a.questionId).slice(0, 40),
-          code: String(a.code || '').slice(0, 50000),
-          language: ['javascript', 'python', 'cpp'].includes(a.language) ? a.language : 'javascript',
-          passed: Math.min(passed, 1000)
+          code: String(a.code || '').slice(0, 5000),
+          language: ['text', 'mcq'].includes(a.language) ? a.language : 'text',
+          passed: 0
         };
       });
 

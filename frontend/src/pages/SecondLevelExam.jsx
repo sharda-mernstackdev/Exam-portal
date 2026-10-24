@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useExamGuard } from "../hooks/useExamGuard";
 import { useProctor } from "../hooks/useProctor";
@@ -27,10 +27,10 @@ const CAM_MESSAGES = {
   lost: ["Camera was disconnected", "Reconnect your camera, then click Check Camera Again."]
 };
 
-// ---- Per-question code drafts (survive a refresh / re-login on this browser) ----
+// ---- Per-question answer drafts (survive a refresh / re-login on this browser) ----
 // Every draft is stored under: round 2 + candidate (id from the signed-in
-// token) + the question's own id + the language. Nothing is keyed by the
-// question's position, so one question's code can never land in another's.
+// token) + the question's own id. Nothing is keyed by the question's
+// position, so one question's answer can never land in another's.
 function getDraftOwner() {
   try {
     const t = localStorage.getItem("studentToken") || "";
@@ -40,8 +40,7 @@ function getDraftOwner() {
     return String(localStorage.getItem("candidateEmail") || "");
   }
 }
-function draftCodeKey(owner, qid, lang) { return `r2code:${owner}:${qid}:${lang}`; }
-function draftLangKey(owner, qid) { return `r2lang:${owner}:${qid}`; }
+function draftAnswerKey(owner, qid) { return `r2ans:${owner}:${qid}`; }
 function readDraft(key) {
   try { return localStorage.getItem(key); } catch (e) { return null; }
 }
@@ -53,48 +52,10 @@ function clearDrafts(owner) {
     const drop = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.indexOf(`r2code:${owner}:`) === 0 || k.indexOf(`r2lang:${owner}:`) === 0)) drop.push(k);
+      if (k && (k.indexOf(`r2ans:${owner}:`) === 0 || k.indexOf(`r2code:${owner}:`) === 0 || k.indexOf(`r2lang:${owner}:`) === 0)) drop.push(k);
     }
     drop.forEach((k) => localStorage.removeItem(k));
   } catch (e) { /* ignore */ }
-}
-
-function runTestCase(code, funcName, args) {
-  try {
-    const body = '"use strict";\n' + code + "\nreturn " + funcName + "(...args);";
-    // eslint-disable-next-line no-new-func
-    const runner = new Function("args", body);
-    return { ok: true, result: runner(args) };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-function evaluateQuestion(question, code, lang) {
-  if (lang === "javascript") {
-    const results = question.testCases.map((tc) => {
-      const run = runTestCase(code, question.funcName, tc.input);
-      let pass = false;
-      try {
-        pass = run.ok && JSON.stringify(run.result) === JSON.stringify(tc.expected);
-      } catch (e) {
-        pass = run.result === tc.expected;
-      }
-      return { pass, hidden: tc.hidden, input: tc.input, expected: tc.expected, actual: run.ok ? run.result : undefined, error: run.ok ? null : run.error };
-    });
-    return { results, passed: results.filter((r) => r.pass).length, total: results.length };
-  }
-  const defaultCode = question.starterCode[lang].trim();
-  const hasModified = code.trim() !== defaultCode && code.trim().length > defaultCode.length - 10;
-  const results = question.testCases.map((tc) => ({
-    pass: hasModified,
-    hidden: tc.hidden,
-    input: tc.input,
-    expected: tc.expected,
-    actual: hasModified ? tc.expected : undefined,
-    error: hasModified ? null : "Simulated Compiler Error: Method implementation missing."
-  }));
-  return { results, passed: hasModified ? results.length : 0, total: results.length };
 }
 
 export default function SecondLevelExam() {
@@ -119,7 +80,7 @@ export default function SecondLevelExam() {
   function handleLockdownViolation(kind) {
     if (phaseRef.current !== "exam") return; // don't penalize before the exam starts
     if (submittedRef.current) return;
-     // The browser's microphone permission box can drop fullscreen / blur the
+    // The browser's microphone permission box can drop fullscreen / blur the
     // page by itself. That is not the candidate's fault: no violation then.
     if (Date.now() < permGraceUntilRef.current) return;
     // One qualifying action = one violation (several events can fire for it).
@@ -154,8 +115,6 @@ export default function SecondLevelExam() {
   const [candidateName, setCandidateName] = useState("");
   const [questions, setQuestions] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [currentLang, setCurrentLang] = useState("javascript");
-  const [code, setCode] = useState("");
   const [timeLeft, setTimeLeft] = useState(EXAM_DURATION_MIN * 60);
   // The SERVER fixes the deadline (when Begin is pressed) and tells this page
   // which mode applies; the page only counts down to that deadline. The mode
@@ -182,19 +141,16 @@ export default function SecondLevelExam() {
   const [resultScore, setResultScore] = useState({ passed: 0, total: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [clipMsg, setClipMsg] = useState("");
-  const [resetAsk, setResetAsk] = useState(null); // { qid, lang } while "Reset?" is shown
   const clipMsgTimerRef = useRef(null);
   const lastClipLogRef = useRef(0);
 
-  // Source of truth for the candidate's code: userCodeRef.current[questionId][language].
-  // It is written on every keystroke (see setQuestionCode), so there is never a
-  // "pending save" that a later navigation or a stale closure could apply to the
-  // wrong question. langByQRef remembers which language each question is in.
-  const userCodeRef = useRef({}); // userCode[q.id][lang]
-  const langByQRef = useRef({}); // q.id -> language
+  // Source of truth for the candidate's answers: answersRef.current[questionId]
+  // = the text typed (text question) or the chosen option number as text (MCQ,
+  // "" = nothing chosen). It is written on every keystroke / click (see
+  // setAnswer), keyed by the question's own id - never by its position - so one
+  // question's answer can never land in another's.
+  const answersRef = useRef({}); // q.id -> answer
   const draftOwnerRef = useRef("");
-  const questionStatusRef = useRef({}); // q.id -> status
-  const lastRunRef = useRef({}); // q.id -> evalResult
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => n + 1);
 
@@ -217,7 +173,7 @@ export default function SecondLevelExam() {
     }
   }
 
-    function checkCamera() {
+  function checkCamera() {
     stopCamStream();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamStatus("unsupported");
@@ -317,22 +273,12 @@ export default function SecondLevelExam() {
         const owner = getDraftOwner();
         draftOwnerRef.current = owner;
         qs.forEach((q) => {
-          const starter = q.starterCode || {};
-          const codes = {};
-          ["javascript", "python", "cpp"].forEach((lang) => {
-            const draft = readDraft(draftCodeKey(owner, q.id, lang));
-            codes[lang] = draft !== null ? draft : (starter[lang] || "");
-          });
-          userCodeRef.current[q.id] = codes; // a fresh object per question
-          const savedLang = readDraft(draftLangKey(owner, q.id));
-          langByQRef.current[q.id] = ["javascript", "python", "cpp"].includes(savedLang) ? savedLang : "javascript";
-          questionStatusRef.current[q.id] = "not-attempted";
+          const draft = readDraft(draftAnswerKey(owner, q.id));
+          answersRef.current[q.id] = draft !== null ? draft : "";
         });
         questionsRef.current = qs;
         setQuestions(qs);
         setCurrentIndex(0);
-        setCurrentLang(langByQRef.current[qs[0].id]);
-        setCode(userCodeRef.current[qs[0].id][langByQRef.current[qs[0].id]]);
         // Which mode / duration applies (and the deadline, if this exam was
         // already started and the page was refreshed). Not fatal if it fails.
         return ExamAPI.getSecondLevelStatus()
@@ -350,26 +296,17 @@ export default function SecondLevelExam() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Writes `value` as the code of ONE question in ONE language (memory + draft).
-  function setQuestionCode(qid, lang, value) {
-    if (!userCodeRef.current[qid]) return;
-    userCodeRef.current[qid][lang] = value;
-    writeDraft(draftCodeKey(draftOwnerRef.current, qid, lang), value);
+  // Saves the answer of ONE question (memory + draft on this browser).
+  function setAnswer(qid, value) {
+    answersRef.current[qid] = value;
+    writeDraft(draftAnswerKey(draftOwnerRef.current, qid), value);
+    rerender();
   }
 
-  function setQuestionLang(qid, lang) {
-    langByQRef.current[qid] = lang;
-    writeDraft(draftLangKey(draftOwnerRef.current, qid), lang);
-  }
-
-  // Shows question `idx`: its own language and its own code (or starter).
+  // Shows question `idx`.
   function loadQuestionInto(idx) {
-    const target = questions[idx];
-    if (!target) return;
-    const lang = langByQRef.current[target.id] || "javascript";
+    if (!questions[idx]) return;
     setCurrentIndex(idx);
-    setCurrentLang(lang);
-    setCode(userCodeRef.current[target.id][lang]);
   }
 
   // Reads the server's timer information (see GET /second-level/status).
@@ -486,23 +423,18 @@ export default function SecondLevelExam() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, timeLeft, onlineMode]);
 
-  // Campus mode: every 10 s send the server the current code of every
-  // question (each with its own language). If the browser dies before the
-  // deadline, the server finalizes the exam from the latest copy it received.
+  // Campus mode: every 10 s send the server the current answer of every
+  // question. If the browser dies before the deadline, the server finalizes
+  // the exam from the latest copy it received.
   useEffect(() => {
     if (phase !== "exam" || !campus) return undefined;
     function save() {
       if (submittedRef.current || draftBusyRef.current || !questionsRef.current) return;
-      const answers = questionsRef.current.map((qq) => {
-        const lang = langByQRef.current[qq.id] || "javascript";
-        const last = lastRunRef.current[qq.id];
-        return {
-          questionId: qq.id,
-          language: lang,
-          code: (userCodeRef.current[qq.id] && userCodeRef.current[qq.id][lang]) || "",
-          passed: last ? last.passed : 0
-        };
-      });
+      const answers = questionsRef.current.map((qq) => ({
+        questionId: qq.id,
+        language: qq.type,
+        code: answersRef.current[qq.id] || ""
+      }));
       const snap = JSON.stringify(answers);
       if (snap === lastSavedRef.current) return;
       draftBusyRef.current = true;
@@ -520,46 +452,8 @@ export default function SecondLevelExam() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, campus]);
 
-  function handleLangChange(lang) {
-    const cur = questions[currentIndex];
-    setQuestionLang(cur.id, lang);
-    setCurrentLang(lang);
-    setCode(userCodeRef.current[cur.id][lang]);
-  }
-
   // Once time is up (or the exam is being submitted) nothing can be changed.
   const locked = submitting || (phase === "exam" && timeLeft <= 0);
-
-  function handleRun() {
-    if (locked) return;
-    const q = questions[currentIndex];
-    const evalResult = evaluateQuestion(q, userCodeRef.current[q.id][currentLang], currentLang);
-    lastRunRef.current[q.id] = evalResult;
-    questionStatusRef.current[q.id] = evalResult.passed === evalResult.total ? "solved" : "attempted";
-    rerender();
-  }
-
-  // Reset asks "are you sure?" INSIDE the page. It must not use window.confirm():
-  // a browser dialog takes the window's focus and drops fullscreen, which was
-  // counted as a violation. `resetAsk` remembers which question + language the
-  // question was asked for, so a confirm can never reset a different one.
-  function handleReset() {
-    if (locked) return;
-    const q = questions[currentIndex];
-    setResetAsk({ qid: q.id, lang: currentLang });
-  }
-  function confirmReset() {
-    const ask = resetAsk;
-    setResetAsk(null);
-    if (locked || !ask) return;
-    const q = questions[currentIndex];
-    if (!q || q.id !== ask.qid || currentLang !== ask.lang) return;
-    const starter = (q.starterCode && q.starterCode[currentLang]) || "";
-    setQuestionCode(q.id, currentLang, starter);
-    setCode(starter);
-    lastRunRef.current[q.id] = null;
-    rerender();
-  }
 
   function handleNext() {
     if (currentIndex < questions.length - 1) loadQuestionInto(currentIndex + 1);
@@ -568,24 +462,24 @@ export default function SecondLevelExam() {
     if (currentIndex > 0) loadQuestionInto(currentIndex - 1);
   }
 
-  // ---- No copy / cut / paste in the code editor ----
-  // The code must be typed by the candidate. This blocks the ordinary
-  // clipboard routes inside the editor itself (keyboard shortcuts, the
+  // ---- No copy / cut / paste in the answer box ----
+  // The answer must be typed by the candidate. This blocks the ordinary
+  // clipboard routes inside the answer box itself (keyboard shortcuts, the
   // right-click menu, the browser menu, drag-and-drop of text, and a paste that
-  // arrives as an input event). Typing, Tab indent, selecting, Ctrl/Cmd+A,
-  // undo/redo, Run and Submit are untouched. A browser cannot stop every
+  // arrives as an input event). Typing, selecting, Ctrl/Cmd+A, undo/redo and
+  // Submit are untouched. A browser cannot stop every
   // possible way of getting text in (e.g. a typing-automation tool or
   // another device), so the server-side checks and the proctoring log stay
   // in place; each blocked attempt is also recorded in the proctor log.
   function clipboardBlocked(what) {
-    setClipMsg("Copy, cut and paste are disabled in the code editor. Please type your code.");
+    setClipMsg("Copy, cut and paste are disabled. Please type your answer.");
     clearTimeout(clipMsgTimerRef.current);
     clipMsgTimerRef.current = setTimeout(() => setClipMsg(""), 3000);
     const now = Date.now();
     if (now - lastClipLogRef.current > 8000) {
       lastClipLogRef.current = now;
       try {
-        ExamAPI.logProctorEvent({ type: "clipboard_blocked", detail: "Tried to " + what + " in the code editor", page: location.pathname }).catch(() => {});
+        ExamAPI.logProctorEvent({ type: "clipboard_blocked", detail: "Tried to " + what + " in the answer box", page: location.pathname }).catch(() => {});
       } catch (e) { /* ignore */ }
     }
   }
@@ -598,7 +492,7 @@ export default function SecondLevelExam() {
     };
   }
 
-  function handleEditorChange(e) {
+  function handleAnswerChange(e) {
     if (locked) return;
     // A paste / drop / cut that slipped past the handlers above shows up here
     // as an input event of that type: ignore it (the controlled textarea
@@ -608,11 +502,10 @@ export default function SecondLevelExam() {
       clipboardBlocked(t === "deleteByCut" ? "cut" : "paste");
       return;
     }
-    setCode(e.target.value);
-    setQuestionCode(questions[currentIndex].id, currentLang, e.target.value);
+    setAnswer(questions[currentIndex].id, e.target.value);
   }
 
-  function handleEditorKeyDown(e) {
+  function handleAnswerKeyDown(e) {
     if (locked) return;
     const key = (e.key || "").toLowerCase();
     const mod = e.ctrlKey || e.metaKey; // Ctrl on Windows/Linux, Cmd on macOS
@@ -627,16 +520,6 @@ export default function SecondLevelExam() {
       e.preventDefault();
       e.stopPropagation();
       clipboardBlocked(e.ctrlKey ? "copy" : e.shiftKey && key === "delete" ? "cut" : "paste");
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const el = e.target;
-      const s = el.selectionStart, end = el.selectionEnd;
-      const next = code.substring(0, s) + "    " + code.substring(end);
-      setCode(next);
-      setQuestionCode(questions[currentIndex].id, currentLang, next);
-      requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = s + 4; });
     }
   }
 
@@ -645,29 +528,30 @@ export default function SecondLevelExam() {
     if (!qs || submittedRef.current) return;
     submittedRef.current = true;
     setSubmitting(true);
-    let totalPassed = 0, totalCases = 0;
-    // Each question is evaluated and sent with ITS OWN code and ITS OWN
-    // language (not whatever language happens to be selected on screen).
-    // Everything is read from the per-question store, so this is correct even
-    // when called from an older render (timer / violation handlers).
-    const answers = qs.map((q) => {
-      const lang = langByQRef.current[q.id] || "javascript";
-      const qCode = (userCodeRef.current[q.id] && userCodeRef.current[q.id][lang]) || "";
-      const res = evaluateQuestion(q, qCode, lang);
-      totalPassed += res.passed;
-      totalCases += res.total;
-      return { questionId: q.id, title: q.title, code: qCode, language: lang, passed: res.passed, total: res.total };
-    });
+    let totalPassed = 0, totalCases = qs.length;
+    // Every answer is sent with ITS OWN question id. The marks are worked out by
+    // the server; nothing about correctness is decided here.
+    const answers = qs.map((q) => ({
+      questionId: q.id,
+      title: q.title,
+      code: answersRef.current[q.id] || "",
+      language: q.type
+    }));
 
-    ExamAPI.submitSecondLevel({ answers, totalScore: totalPassed, auto: !!auto, reason: reason || "" })
-      .then(() => {
+    ExamAPI.submitSecondLevel({ answers, auto: !!auto, reason: reason || "" })
+      .then((saved) => {
+        // The server marks the answers: show its numbers.
+        if (saved && Array.isArray(saved.answers) && saved.answers.length) {
+          totalPassed = saved.answers.reduce((n, a) => n + (Number(a.passed) || 0), 0);
+          totalCases = saved.answers.reduce((n, a) => n + (Number(a.total) || 0), 0);
+        }
         clearDrafts(draftOwnerRef.current);
         setResultLine(
           reason === "time"
             ? "Time is up! Your exam time has expired and your exam was submitted automatically."
             : auto
               ? "Your exam was submitted automatically because of rule violations."
-              : "Your code has been uploaded to the admin dashboard."
+              : "Your answers have been submitted."
         );
         setResultScore({ passed: totalPassed, total: totalCases });
         setPhase("result");
@@ -692,7 +576,7 @@ export default function SecondLevelExam() {
         }
         // Network problem. When the time is up the exam must still be handed
         // in, so keep retrying every 3 s (the server also closes the exam
-        // itself shortly after the deadline, from the code it already has).
+        // itself shortly after the deadline, from the answers it already has).
         if (reason === "time" && !(err.status >= 400 && err.status < 500)) {
           setTimeout(() => submitExam(true, "time"), 3000);
           return;
@@ -716,7 +600,6 @@ export default function SecondLevelExam() {
   }
 
   const q = questions ? questions[currentIndex] : null;
-  const evalResult = q ? lastRunRef.current[q.id] : null;
   const minutes = String(Math.floor(timeLeft / 60)).padStart(2, "0");
   const seconds = String(timeLeft % 60).padStart(2, "0");
 
@@ -739,7 +622,7 @@ export default function SecondLevelExam() {
       {/* Header */}
       <div className="d-flex justify-content-between align-items-center" style={{ background: "#0f172a", color: "#fff", padding: "12px 24px", flexShrink: 0 }}>
         <div className="d-flex align-items-center gap-3">
-          <h5 className="mb-0 text-warning"><i className="fa-solid fa-laptop-code me-2"></i>Test Cases Exam</h5>
+          <h5 className="mb-0 text-warning"><i className="fa-solid fa-pen-to-square me-2"></i>Round 2 Exam</h5>
           <span className="badge bg-secondary px-3 py-2">{candidateName || "Candidate Name"}</span>
         </div>
         <LiveClock style={{ backgroundColor: "rgba(255,255,255,0.1)", padding: "4px 12px", borderRadius: 6, fontSize: "0.85rem", color: "#38bdf8" }} className="d-none d-md-flex align-items-center" />
@@ -748,7 +631,7 @@ export default function SecondLevelExam() {
             <div className="bg-danger text-white px-3 py-1 rounded fw-bold">
               <i className="fa-regular fa-clock me-1"></i> {minutes}:{seconds}
             </div>
-            <button className="btn btn-outline-light btn-sm fw-bold" disabled={locked} onClick={() => { if (window.confirm("Complete the exam? You cannot modify your code after this.")) submitExam(false); }}>
+            <button className="btn btn-outline-light btn-sm fw-bold" disabled={locked} onClick={() => { if (window.confirm("Complete the exam? You cannot change your answers after this.")) submitExam(false); }}>
               Complete Exam
             </button>
           </div>
@@ -758,14 +641,14 @@ export default function SecondLevelExam() {
       {phase === "start" && (
         <div className="flex-fill d-flex align-items-center justify-content-center" style={{ background: "#f4f6f9", overflowY: "auto" }}>
           <div className="bg-white text-center" style={{ borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.05)", padding: 40, maxWidth: 500, width: "100%" }}>
-            <i className="fa-solid fa-code fa-3x text-primary mb-3"></i>
-            <h4 className="fw-bold mb-1">Round 2: Technical & Coding</h4>
-            <p className="text-muted small mb-4">You have <span className="fw-bold">{mode ? durationMin : EXAM_DURATION_MIN}</span> minutes to solve algorithmic problems.</p>
+            <i className="fa-solid fa-pen-to-square fa-3x text-primary mb-3"></i>
+            <h4 className="fw-bold mb-1">Round 2: Technical Assessment</h4>
+            <p className="text-muted small mb-4">You have <span className="fw-bold">{mode ? durationMin : EXAM_DURATION_MIN}</span> minutes to answer the questions.</p>
             <div className="text-start bg-light p-3 rounded mb-4 border">
               <ul className="mb-0 small text-secondary">
-                <li>Select your preferred programming language (JavaScript, Python, C++) from the code editor dropdown.</li>
-                <li>Use <strong>Run Code</strong> to execute your solution against visible and hidden test cases.</li>
-                <li>Your code must return the specified output format exactly.</li>
+                <li>Some questions have an <strong>answer box</strong>: type your answer exactly. Your answer is correct only if it matches the expected answer exactly (capital and small letters count).</li>
+                <li>Other questions are <strong>MCQs</strong>: choose one option. They come in between the written questions.</li>
+                <li>Copy, cut and paste are disabled. You can change an answer any time before you submit.</li>
                 {onlineMode ? (
                   <li>You must click <strong>Complete Exam</strong> before the timer ends. This exam is <strong>not</strong> submitted automatically when the time is over and cannot be submitted after the deadline. The time is kept by the server, so refreshing the page does not restart it.</li>
                 ) : (
@@ -805,159 +688,114 @@ export default function SecondLevelExam() {
             {/* Sidebar */}
             <div style={{ width: 250, flexShrink: 0, background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 16, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
               <div className="fw-bold text-uppercase" style={{ fontSize: "0.85rem", color: "#64748b", marginBottom: 8 }}>
-                <i className="fa-solid fa-list-check me-2"></i>Problems
+                <i className="fa-solid fa-list-check me-2"></i>Questions
               </div>
-              {questions.map((qq, idx) => (
-                <div
-                  key={qq.id}
-                  onClick={() => loadQuestionInto(idx)}
-                  className="d-flex align-items-center justify-content-between"
-                  style={{
-                    background: idx === currentIndex ? "#0d6efd" : "#f8fafc",
-                    color: idx === currentIndex ? "#fff" : "#334155",
-                    border: `1px solid ${idx === currentIndex ? "#0d6efd" : "#cbd5e1"}`,
-                    borderRadius: 6, padding: "10px 12px", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer"
-                  }}
-                >
-                  <span>Q{idx + 1}. {qq.title}</span>
-                  <span style={{
-                    width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                    background: questionStatusRef.current[qq.id] === "solved" ? "#10b981" : questionStatusRef.current[qq.id] === "attempted" ? "#f59e0b" : "#cbd5e1"
-                  }}></span>
-                </div>
-              ))}
-            </div>
-
-            {/* Main */}
-            <div className="d-flex flex-fill" style={{ gap: 16, minWidth: 0 }}>
-              {/* Problem pane */}
-              <div style={{ flex: 1, background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 20, overflowY: "auto", borderRight: "2px dashed #e2e8f0" }}>
-                <div className="d-flex align-items-center mb-3">
-                  <span className="fw-bold" style={{ color: "#1e293b", fontSize: "1.25rem" }}>Q{currentIndex + 1}. {q.title}</span>
-                  <span
-                    className="ms-2"
+              {questions.map((qq, idx) => {
+                const answered = String(answersRef.current[qq.id] || "").trim() !== "";
+                return (
+                  <div
+                    key={qq.id}
+                    onClick={() => loadQuestionInto(idx)}
+                    className="d-flex align-items-center justify-content-between"
                     style={{
-                      fontSize: "0.75rem", fontWeight: 700, padding: "4px 10px", borderRadius: 20,
-                      background: q.difficulty === "Easy" ? "#d1fae5" : q.difficulty === "Medium" ? "#fef3c7" : "#ffe4e6",
-                      color: q.difficulty === "Easy" ? "#059669" : q.difficulty === "Medium" ? "#d97706" : "#e11d48"
+                      background: idx === currentIndex ? "#0d6efd" : "#f8fafc",
+                      color: idx === currentIndex ? "#fff" : "#334155",
+                      border: `1px solid ${idx === currentIndex ? "#0d6efd" : "#cbd5e1"}`,
+                      borderRadius: 6, padding: "10px 12px", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer"
                     }}
                   >
-                    {q.difficulty}
-                  </span>
-                </div>
-                <div style={{ fontSize: "0.95rem", color: "#334155", margin: "16px 0", lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: q.description }} />
-                <h6 className="fw-bold text-secondary fs-6 mt-2 mb-3 border-bottom pb-2">Examples</h6>
-                {q.examples.map((ex, i) => (
-                  <div key={i} style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: 12, marginBottom: 12, fontSize: "0.85rem", fontFamily: "Consolas, monospace" }}>
-                    <strong>Example {i + 1}:</strong><br />Input: <code>{ex.input}</code><br />Output: <code>{ex.output}</code>
+                    <span>Q{idx + 1}. {qq.type === "mcq" ? "MCQ" : "Written answer"}</span>
+                    <span style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0, background: answered ? "#10b981" : "#cbd5e1" }}></span>
                   </div>
-                ))}
+                );
+              })}
+              <div className="small text-muted mt-2">
+                <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#10b981", marginRight: 6 }}></span>Answered
+              </div>
+            </div>
+
+            {/* Main: question on top, answer below */}
+            <div className="d-flex flex-column flex-fill" style={{ minWidth: 0, background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 24, overflowY: "auto" }}>
+              <div className="d-flex align-items-center mb-3">
+                <span className="fw-bold" style={{ color: "#1e293b", fontSize: "1.2rem" }}>Question {currentIndex + 1} of {questions.length}</span>
+                <span className="ms-2 badge bg-secondary">{q.type === "mcq" ? "MCQ" : "Written answer"}</span>
               </div>
 
-              {/* Editor pane */}
-              <div style={{ flex: 1.5, display: "flex", flexDirection: "column", background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 20 }}>
-                <div className="d-flex justify-content-between align-items-center mb-3">
-                  <select
-                    className="form-select form-select-sm fw-bold bg-light border-secondary text-primary"
-                    style={{ width: 140, display: "inline-block" }}
-                    value={currentLang}
-                    onChange={(e) => handleLangChange(e.target.value)}
-                  >
-                    <option value="javascript">JavaScript (ES6)</option>
-                    <option value="python">Python 3.10</option>
-                    <option value="cpp">C++ 17</option>
-                  </select>
-                  {resetAsk && resetAsk.qid === q.id && resetAsk.lang === currentLang && !locked ? (
-                    <div className="d-flex align-items-center">
-                      <span className="fw-bold me-2" style={{ fontSize: "0.8rem" }}>Reset to starter code?</span>
-                      <button type="button" className="btn btn-sm btn-danger fw-bold me-2" onClick={confirmReset}>Yes, reset</button>
-                      <button type="button" className="btn btn-sm btn-outline-secondary fw-bold" onClick={() => setResetAsk(null)}>Cancel</button>
-                    </div>
-                  ) : (
-                  <div>
-                    <button className="btn btn-sm btn-outline-secondary fw-bold me-2" disabled={locked} onClick={handleReset}>
-                      <i className="fa-solid fa-rotate-left me-1"></i> Reset
-                    </button>
-                    <button className="btn btn-sm btn-success fw-bold" disabled={locked} onClick={handleRun}>
-                      <i className="fa-solid fa-play me-1"></i> Run Code
-                    </button>
-                  </div>
-                  )}
-                </div>
+              {/* The question is plain text (never HTML), so tags such as <a> show as typed. */}
+              <div style={{ fontSize: "1.02rem", color: "#1e293b", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 20 }}>{q.description}</div>
 
-                {clipMsg && (
-                  <div className="text-danger fw-bold mb-1" style={{ fontSize: "0.78rem" }}>
-                    <i className="fa-solid fa-ban me-1"></i>{clipMsg}
-                  </div>
-                )}
-                <textarea
-                  key={`${q.id}:${currentLang}`}
-                  spellCheck={false}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  value={code}
-                  readOnly={locked}
-                  onChange={handleEditorChange}
-                  onKeyDown={handleEditorKeyDown}
-                  onCopy={blockClipboardEvent("copy")}
-                  onCut={blockClipboardEvent("cut")}
-                  onPaste={blockClipboardEvent("paste")}
-                  onContextMenu={blockClipboardEvent("open the right-click menu")}
-                  onDrop={blockClipboardEvent("drop text")}
-                  onDragStart={(e) => e.preventDefault()}
-                  style={{
-                    flex: 1, width: "100%", background: "#1e1e2e", color: "#e6e6f0", fontFamily: "Consolas, monospace",
-                    fontSize: "0.9rem", borderRadius: 8, border: "none", padding: 16, resize: "none", tabSize: 4, marginBottom: 12, outline: "none"
-                  }}
-                />
-
-                <div style={{ background: "#12121c", borderRadius: 8, padding: 16, minHeight: 120, maxHeight: 200, overflowY: "auto", fontFamily: "Consolas, monospace", fontSize: "0.85rem", color: "#d8d8e6", marginBottom: 16 }}>
-                  {currentLang !== "javascript" && (
-                    <div className="alert alert-dark text-warning p-2 mb-2" style={{ fontSize: "0.75rem" }}>
-                      <i className="fa-solid fa-info-circle me-1"></i> Note: Python and C++ compilation is simulated in this UI demo.
+              {q.type === "mcq" ? (
+                <div className="d-flex flex-column" style={{ gap: 10, maxWidth: 720 }}>
+                  {(q.options || []).map((opt, i) => {
+                    const chosen = String(answersRef.current[q.id]) === String(i);
+                    return (
+                      <label
+                        key={i}
+                        className="d-flex align-items-center"
+                        style={{
+                          gap: 12, padding: "12px 14px", borderRadius: 8, cursor: locked ? "default" : "pointer",
+                          border: `2px solid ${chosen ? "#0d6efd" : "#cbd5e1"}`, background: chosen ? "#eff6ff" : "#fff"
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name={`mcq-${q.id}`}
+                          checked={chosen}
+                          disabled={locked}
+                          onChange={() => setAnswer(q.id, String(i))}
+                        />
+                        <span style={{ whiteSpace: "pre-wrap" }}>{opt}</span>
+                      </label>
+                    );
+                  })}
+                  {String(answersRef.current[q.id] || "") !== "" && !locked && (
+                    <div>
+                      <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setAnswer(q.id, "")}>Clear my choice</button>
                     </div>
                   )}
-                  {!evalResult ? (
-                    currentLang === "javascript" && <div className="text-muted"><i className="fa-solid fa-terminal me-2"></i>Console output will appear here after you run your code.</div>
-                  ) : (
-                    <>
-                      <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8, fontSize: "0.9rem", borderBottom: "1px solid #333", paddingBottom: 8 }}>
-                        {evalResult.passed} / {evalResult.total} Test Cases Passed
-                      </div>
-                      {evalResult.results.map((r, i) => (
-                        <div key={i}>
-                          <div className="d-flex align-items-center" style={{ padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                            <span className="me-2" style={{ fontSize: "0.72rem", fontWeight: 700, padding: "3px 10px", borderRadius: 12, background: r.pass ? "#064e3b" : "#7f1d1d", color: r.pass ? "#34d399" : "#f87171" }}>
-                              {r.pass ? "PASS" : "FAIL"}
-                            </span>
-                            {r.hidden ? (
-                              <span className="text-muted small flex-grow-1">Hidden Test Case</span>
-                            ) : (
-                              <span className="small flex-grow-1" style={{ color: "#e2e8f0", fontFamily: "monospace" }}>
-                                Input: {JSON.stringify(r.input)} | Expected: {JSON.stringify(r.expected)}
-                              </span>
-                            )}
-                          </div>
-                          {r.error && <div className="small ms-5" style={{ color: "#f87171", marginTop: 4 }}>{r.error}</div>}
-                        </div>
-                      ))}
-                    </>
+                </div>
+              ) : (
+                <div style={{ maxWidth: 720 }}>
+                  <label className="form-label small fw-bold text-secondary">Your answer</label>
+                  {clipMsg && (
+                    <div className="text-danger fw-bold mb-1" style={{ fontSize: "0.78rem" }}>
+                      <i className="fa-solid fa-ban me-1"></i>{clipMsg}
+                    </div>
                   )}
+                  <textarea
+                    key={q.id}
+                    rows={5}
+                    spellCheck={false}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    placeholder="Type your answer here..."
+                    value={answersRef.current[q.id] || ""}
+                    readOnly={locked}
+                    onChange={handleAnswerChange}
+                    onKeyDown={handleAnswerKeyDown}
+                    onCopy={blockClipboardEvent("copy")}
+                    onCut={blockClipboardEvent("cut")}
+                    onPaste={blockClipboardEvent("paste")}
+                    onContextMenu={blockClipboardEvent("open the right-click menu")}
+                    onDrop={blockClipboardEvent("drop text")}
+                    onDragStart={(e) => e.preventDefault()}
+                    className="form-control"
+                    style={{ fontSize: "1rem", padding: 14, resize: "vertical", userSelect: "text" }}
+                  />
                 </div>
+              )}
 
-                {/* Prev / Next row. The camera box is fixed in the bottom-right corner (about
-                    184px wide), so the right padding keeps Next to the LEFT of it instead of
-                    underneath it. Pixel values scale with browser zoom exactly like the camera
-                    box does; flexWrap keeps both buttons visible on a narrow window. */}
-                <div className="d-flex justify-content-between" style={{ gap: 10, paddingRight: 160, flexWrap: "wrap" }}>
-                  <button className="btn btn-outline-secondary fw-bold px-4" disabled={currentIndex === 0} onClick={handlePrev}>
-                    <i className="fa-solid fa-arrow-left me-2"></i> Prev
-                  </button>
-                  <button className="btn btn-primary fw-bold px-4" onClick={handleNext}>
-                    {currentIndex === questions.length - 1 ? (<><i className="fa-solid fa-save me-1"></i> Save</>) : (<>Next <i className="fa-solid fa-arrow-right ms-2"></i></>)}
-                  </button>
-                </div>
+              {/* Prev / Next row. The camera box is fixed in the bottom-right corner (about
+                  184px wide), so the right padding keeps Next to the LEFT of it instead of
+                  underneath it. */}
+              <div className="d-flex justify-content-between mt-auto pt-4" style={{ gap: 10, paddingRight: 160, flexWrap: "wrap" }}>
+                <button className="btn btn-outline-secondary fw-bold px-4" disabled={currentIndex === 0} onClick={handlePrev}>
+                  <i className="fa-solid fa-arrow-left me-2"></i> Prev
+                </button>
+                <button className="btn btn-primary fw-bold px-4" onClick={handleNext}>
+                  {currentIndex === questions.length - 1 ? (<><i className="fa-solid fa-save me-1"></i> Save</>) : (<>Next <i className="fa-solid fa-arrow-right ms-2"></i></>)}
+                </button>
               </div>
             </div>
           </div>
@@ -979,7 +817,7 @@ export default function SecondLevelExam() {
                 <h1 className="display-4 fw-bold text-primary mb-0">
                   {resultScore.passed}<span className="fs-4 text-secondary"> / {resultScore.total}</span>
                 </h1>
-                <p className="small text-muted fw-bold text-uppercase mt-2 mb-0">Total Test Cases Passed</p>
+                <p className="small text-muted fw-bold text-uppercase mt-2 mb-0">Correct Answers</p>
               </div>
             )}
             <button className="btn btn-outline-dark fw-bold px-5" onClick={() => window.close()}>Close Window</button>

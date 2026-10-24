@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import ExamAPI from "../../api";
 import { formatDate } from "./analytics";
-import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV } from "./codingQuestionCsv";
+import { downloadCodingQuestionsCSV, parseCodingQuestionsCSV, titleFromQuestion } from "./codingQuestionCsv";
 import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 
+// A Round 2 question is either a "Text answer" (the candidate types the answer in a
+// box; it must match the correct answer exactly) or an "MCQ" (4 options).
 const EMPTY_CQ_FORM = {
-  title: "", difficulty: "Medium", description: "", correctOutput: "",
-  ex1In: "", ex1Out: "", ex2In: "", ex2Out: "", ex3In: "", ex3Out: ""
+  type: "text", difficulty: "Medium", description: "", answer: "",
+  optA: "", optB: "", optC: "", optD: "", correct: "A"
 };
+const OPTION_LETTERS = ["A", "B", "C", "D"];
 
 // Given a datetime-local string ("YYYY-MM-DDTHH:mm") and a duration in
 // minutes, returns the computed end datetime-local string. Returns "" if
@@ -51,19 +54,6 @@ const DIFFICULTY_LEVELS = ["Easy", "Medium", "Hard"];
 function examLevels(ex) {
   if (Array.isArray(ex.difficulties) && ex.difficulties.length) return ex.difficulties;
   return ex.difficulty ? [ex.difficulty] : [];
-}
-
-function parseArg(val) {
-  try { return JSON.parse("[" + val + "]"); } catch (e) { return [val]; }
-}
-function parseOut(val) {
-  try { return JSON.parse(val); } catch (e) { return val; }
-}
-function toFuncName(title) {
-  const camel = title.replace(/[^a-zA-Z0-9 ]/g, "").split(/\s+/)
-    .map((w, i) => (i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
-    .join("");
-  return camel || "solution" + Date.now();
 }
 
 const FRONTEND_URL = window.location.origin;
@@ -209,32 +199,6 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     csvInputRef.current?.click();
   }
 
-  function buildCqPayloadFromRow(row) {
-    const funcName = toFuncName(row.title);
-    return {
-      title: row.title,
-      difficulty: row.difficulty,
-      description: row.description,
-      funcName,
-      correctOutput: row.correctOutput,
-      examples: [
-        { input: row.ex1In, output: row.ex1Out },
-        { input: row.ex2In, output: row.ex2Out },
-        { input: row.ex3In, output: row.ex3Out }
-      ],
-      starterCode: {
-        javascript: `function ${funcName}(args) {\n    // write your code here\n\n}`,
-        python: `def ${funcName}(args):\n    # write your code here\n    pass`,
-        cpp: `#include <iostream>\nusing namespace std;\n\nvoid ${funcName}() {\n    // write your code here\n}`
-      },
-      testCases: [
-        { input: parseArg(row.ex1In), expected: parseOut(row.ex1Out), hidden: false },
-        { input: parseArg(row.ex2In), expected: parseOut(row.ex2Out), hidden: false },
-        { input: parseArg(row.ex3In), expected: parseOut(row.ex3Out), hidden: false }
-      ]
-    };
-  }
-
   function handleCodingCSVFileSelected(e) {
     const file = e.target.files && e.target.files[0];
     e.target.value = ""; // allow re-selecting the same file next time
@@ -242,19 +206,18 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
 
     const reader = new FileReader();
     reader.onload = () => {
-      const { rows, skipped } = parseCodingQuestionsCSV(String(reader.result || ""));
-      if (rows.length === 0) {
-        setCsvImportMsg(skipped > 0 ? `No valid rows found (${skipped} skipped — check required columns).` : "The file appears to be empty.");
+      const { questions, skipped } = parseCodingQuestionsCSV(String(reader.result || ""));
+      if (questions.length === 0) {
+        setCsvImportMsg(skipped > 0 ? `No valid rows found (${skipped} skipped - check the columns).` : "The file appears to be empty.");
         return;
       }
-      const payload = rows.map(buildCqPayloadFromRow);
-      ExamAPI.adminBulkCreateCodingQuestions(payload)
+      ExamAPI.adminBulkCreateCodingQuestions(questions)
         .then((res) => {
           const dup = res.duplicates || 0;
           setCsvImportMsg(
             `${res.inserted} question(s) added.` +
-            (dup > 0 ? ` ${dup} duplicate title(s) skipped.` : "") +
-            (skipped > 0 ? ` ${skipped} row(s) skipped (missing required fields).` : "")
+            (dup > 0 ? ` ${dup} duplicate question(s) skipped.` : "") +
+            (skipped > 0 ? ` ${skipped} row(s) skipped (missing or wrong fields).` : "")
           );
           onCodingQuestionsChanged();
         })
@@ -264,42 +227,37 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
   }
 
   function startEdit(q) {
+    if (q.type !== "text" && q.type !== "mcq") return;
     setEditingId(q._id);
+    const o = q.options || [];
     setCqForm({
-      title: q.title, difficulty: q.difficulty, description: q.description, correctOutput: q.correctOutput || "",
-      ex1In: q.examples?.[0]?.input || "", ex1Out: q.examples?.[0]?.output || "",
-      ex2In: q.examples?.[1]?.input || "", ex2Out: q.examples?.[1]?.output || "",
-      ex3In: q.examples?.[2]?.input || "", ex3Out: q.examples?.[2]?.output || ""
+      type: q.type, difficulty: q.difficulty, description: q.description, answer: q.answer || "",
+      optA: o[0] || "", optB: o[1] || "", optC: o[2] || "", optD: o[3] || "",
+      correct: OPTION_LETTERS[q.correctIndex] || "A"
     });
     window.scrollTo({ top: document.getElementById("codingQFormAnchor")?.offsetTop - 100 || 0, behavior: "smooth" });
   }
 
   function handleCqSubmit(e) {
     e.preventDefault();
-    const funcName = toFuncName(cqForm.title.trim());
-    const examples = [
-      { input: cqForm.ex1In.trim(), output: cqForm.ex1Out.trim() },
-      { input: cqForm.ex2In.trim(), output: cqForm.ex2Out.trim() },
-      { input: cqForm.ex3In.trim(), output: cqForm.ex3Out.trim() }
-    ];
-    const payload = {
-      title: cqForm.title.trim(),
-      difficulty: cqForm.difficulty,
-      description: cqForm.description.trim(),
-      funcName,
-      correctOutput: cqForm.correctOutput.trim(),
-      examples,
-      starterCode: {
-        javascript: `function ${funcName}(args) {\n    // write your code here\n\n}`,
-        python: `def ${funcName}(args):\n    # write your code here\n    pass`,
-        cpp: `#include <iostream>\nusing namespace std;\n\nvoid ${funcName}() {\n    // write your code here\n}`
-      },
-      testCases: [
-        { input: parseArg(cqForm.ex1In), expected: parseOut(cqForm.ex1Out), hidden: false },
-        { input: parseArg(cqForm.ex2In), expected: parseOut(cqForm.ex2Out), hidden: false },
-        { input: parseArg(cqForm.ex3In), expected: parseOut(cqForm.ex3Out), hidden: false }
-      ]
-    };
+    const description = cqForm.description.trim();
+    let payload;
+    if (cqForm.type === "text") {
+      payload = {
+        type: "text", title: titleFromQuestion(description), difficulty: cqForm.difficulty,
+        description, answer: cqForm.answer.trim()
+      };
+    } else {
+      const raw = [cqForm.optA, cqForm.optB, cqForm.optC, cqForm.optD].map((x) => x.trim());
+      const options = raw.filter((x) => x !== "");
+      const correctText = raw[OPTION_LETTERS.indexOf(cqForm.correct)];
+      if (options.length < 2) { alert("Please fill at least 2 options."); return; }
+      if (!correctText) { alert("The correct option is empty. Choose a filled option as correct."); return; }
+      payload = {
+        type: "mcq", title: titleFromQuestion(description), difficulty: cqForm.difficulty,
+        description, options, correctIndex: options.indexOf(correctText)
+      };
+    }
     const req = editingId ? ExamAPI.adminUpdateCodingQuestion(editingId, payload) : ExamAPI.adminCreateCodingQuestion(payload);
     req
       .then(() => {
@@ -307,7 +265,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
         setCqForm(EMPTY_CQ_FORM);
         onCodingQuestionsChanged();
       })
-      .catch((err) => alert(err.message || "Could not save coding question."));
+      .catch((err) => alert(err.message || "Could not save the question."));
   }
 
   function handleCqDelete(id) {
@@ -331,8 +289,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
 
   return (
     <section className="page-section active">
-      <div className="section-heading">Exam - Round 2 (Technical/Coding)</div>
-      <div className="section-sub">Manage test cases, coding questions, and eligible candidates</div>
+      <div className="section-heading">Exam - Round 2 (Written / MCQ)</div>
+      <div className="section-sub">Manage Round 2 exam setup, questions (text answer + MCQ), and eligible candidates</div>
 
       <div className="card-box" id="round2ExamFormAnchor">
         <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>
@@ -457,7 +415,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             {secondExams.slice().reverse().map((ex, idx) => {
               const theme = ROUND2_CARD_THEMES[idx % ROUND2_CARD_THEMES.length];
               const levels = examLevels(ex);
-              const qCount = levels.reduce((sum, d) => sum + (questionsByDifficulty.get(d) || []).length, 0);
+              const qCount = levels.reduce((sum, d) => sum + (questionsByDifficulty.get(d) || []).filter((q) => q.type === "text" || q.type === "mcq").length, 0);
               return (
                 <div className="col-md-6 col-lg-4" key={ex._id}>
                   <div className="test-card" style={{ borderTop: `5px solid ${theme.accent}`, background: theme.bg }}>
@@ -597,8 +555,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       <div className="card-box mt-4 border-top border-4 border-primary" id="codingQFormAnchor">
         <div className="d-flex justify-content-between align-items-start flex-wrap gap-2">
           <div>
-            <h6 className="fw-bold text-primary mb-1">{editingId ? "Edit Coding Problem" : "Manage Round 2 Coding Questions"}</h6>
-            <div className="sub mb-0">Add algorithmic problems. These sync directly to the candidate's Round 2 dashboard. Exactly 3 examples are required.</div>
+            <h6 className="fw-bold text-primary mb-1">{editingId ? "Edit Round 2 Question" : "Manage Round 2 Questions"}</h6>
+            <div className="sub mb-0">Add Text-answer questions (the candidate types the answer in a box) and MCQs. MCQs are shown in between the text questions automatically.</div>
           </div>
           <div className="d-flex gap-2">
             <button type="button" className="btn btn-sm btn-outline-secondary fw-bold" onClick={handleDownloadCodingCSV}>
@@ -612,51 +570,60 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
         </div>
         {csvImportMsg && <div className="small text-secondary mt-2">{csvImportMsg}</div>}
         <div className="form-text mt-1">
-          Download the current bank as a CSV, add/edit rows in Excel (Title, Difficulty, Description, Ex1–3 Input/Output, Correct Output), then upload it back — new titles are added automatically.
+          CSV columns: Type (Text / MCQ), Difficulty, Question, Correct Answer (Text only), Option A-D and Correct Option (A-D) (MCQ only). New questions are added automatically; the same question is not added twice.
         </div>
 
         <form className="row g-3 mt-2" onSubmit={handleCqSubmit}>
-          <div className="col-md-6">
-            <label className="form-label small fw-bold">Problem Title</label>
-            <input type="text" className="form-control" placeholder="e.g. Find Max Element" required
-              value={cqForm.title} onChange={(e) => setCqForm({ ...cqForm, title: e.target.value })} />
+          <div className="col-md-4">
+            <label className="form-label small fw-bold">Question Type</label>
+            <select className="form-select" value={cqForm.type} onChange={(e) => setCqForm({ ...cqForm, type: e.target.value })}>
+              <option value="text">Text answer (type in a box)</option>
+              <option value="mcq">MCQ (choose an option)</option>
+            </select>
           </div>
           <div className="col-md-3">
-            <label className="form-label small fw-bold">Difficulty</label>
+            <label className="form-label small fw-bold">Difficulty (Set)</label>
             <select className="form-select" value={cqForm.difficulty} onChange={(e) => setCqForm({ ...cqForm, difficulty: e.target.value })}>
               <option value="Easy">Easy</option><option value="Medium">Medium</option><option value="Hard">Hard</option>
             </select>
           </div>
           <div className="col-12">
-            <label className="form-label small fw-bold">Problem Description</label>
-            <textarea className="form-control" rows={2} placeholder="Describe the problem in detail..." required
+            <label className="form-label small fw-bold">Question</label>
+            <textarea className="form-control" rows={3} placeholder="Write the question here..." required
               value={cqForm.description} onChange={(e) => setCqForm({ ...cqForm, description: e.target.value })}></textarea>
           </div>
 
-          <div className="col-md-4"><label className="form-label small fw-bold">Ex 1 Input <span className="text-muted">(Comma sep)</span></label>
-            <input type="text" className="form-control border-info" placeholder="e.g. 1, 2, 3" required value={cqForm.ex1In} onChange={(e) => setCqForm({ ...cqForm, ex1In: e.target.value })} /></div>
-          <div className="col-md-8"><label className="form-label small fw-bold">Ex 1 Output</label>
-            <input type="text" className="form-control border-info" placeholder="e.g. 6" required value={cqForm.ex1Out} onChange={(e) => setCqForm({ ...cqForm, ex1Out: e.target.value })} /></div>
-
-          <div className="col-md-4"><label className="form-label small fw-bold">Ex 2 Input</label>
-            <input type="text" className="form-control border-warning" placeholder="e.g. -1, -2" required value={cqForm.ex2In} onChange={(e) => setCqForm({ ...cqForm, ex2In: e.target.value })} /></div>
-          <div className="col-md-8"><label className="form-label small fw-bold">Ex 2 Output</label>
-            <input type="text" className="form-control border-warning" placeholder="e.g. -3" required value={cqForm.ex2Out} onChange={(e) => setCqForm({ ...cqForm, ex2Out: e.target.value })} /></div>
-
-          <div className="col-md-4"><label className="form-label small fw-bold">Ex 3 Input</label>
-            <input type="text" className="form-control border-danger" placeholder="e.g. 10, 20" required value={cqForm.ex3In} onChange={(e) => setCqForm({ ...cqForm, ex3In: e.target.value })} /></div>
-          <div className="col-md-8"><label className="form-label small fw-bold">Ex 3 Output</label>
-            <input type="text" className="form-control border-danger" placeholder="e.g. 30" required value={cqForm.ex3Out} onChange={(e) => setCqForm({ ...cqForm, ex3Out: e.target.value })} /></div>
-
-          <div className="col-12">
-            <label className="form-label small fw-bold">Correct Output</label>
-            <input type="text" className="form-control" placeholder="Expected final correct output" required
-              value={cqForm.correctOutput} onChange={(e) => setCqForm({ ...cqForm, correctOutput: e.target.value })} />
-          </div>
+          {cqForm.type === "text" ? (
+            <div className="col-12">
+              <label className="form-label small fw-bold">Correct Answer</label>
+              <textarea className="form-control" rows={2} placeholder="The candidate's answer must be exactly this" required
+                value={cqForm.answer} onChange={(e) => setCqForm({ ...cqForm, answer: e.target.value })}></textarea>
+              <div className="form-text">The answer is marked correct only if it matches this exactly (capital / small letters count). Extra spaces and line breaks are ignored.</div>
+            </div>
+          ) : (
+            <>
+              {OPTION_LETTERS.map((L) => {
+                const key = "opt" + L;
+                return (
+                  <div className="col-md-6" key={L}>
+                    <label className="form-label small fw-bold">Option {L}{L === "A" || L === "B" ? "" : " (optional)"}</label>
+                    <input type="text" className="form-control" required={L === "A" || L === "B"}
+                      value={cqForm[key]} onChange={(e) => setCqForm({ ...cqForm, [key]: e.target.value })} />
+                  </div>
+                );
+              })}
+              <div className="col-md-4">
+                <label className="form-label small fw-bold">Correct Option</label>
+                <select className="form-select" value={cqForm.correct} onChange={(e) => setCqForm({ ...cqForm, correct: e.target.value })}>
+                  {OPTION_LETTERS.map((L) => <option key={L} value={L}>Option {L}</option>)}
+                </select>
+              </div>
+            </>
+          )}
 
           <div className="col-12 d-flex justify-content-end gap-2 mt-4">
             {editingId && <button type="button" className="btn btn-outline-secondary fw-bold px-4" onClick={() => { setEditingId(null); setCqForm(EMPTY_CQ_FORM); }}>Cancel</button>}
-            <button type="submit" className="btn btn-dark fw-bold px-5">{editingId ? "Update Coding Problem" : "+ Add Coding Problem"}</button>
+            <button type="submit" className="btn btn-dark fw-bold px-5">{editingId ? "Update Question" : "+ Add Question"}</button>
           </div>
         </form>
       </div>
@@ -667,7 +634,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <h6 className="fw-bold mb-0" style={{ color: "var(--brand-dark)" }}>Round 2 Question Bank</h6>
         </div>
         {codingQuestions.length === 0 ? (
-          <div className="empty-state"><div className="emoji">📝</div><div>No coding questions in the bank yet.</div></div>
+          <div className="empty-state"><div className="emoji">📝</div><div>No Round 2 questions in the bank yet.</div></div>
         ) : (
           <div className="row g-4">
             <div className="col-md-4 order-1">
@@ -713,21 +680,30 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
               ) : (
                 <div className="table-responsive">
                   <table className="table candidates-table mb-0 align-middle">
-                    <thead><tr><th>Title</th><th>Correct Output</th><th>Examples (3 Required)</th><th style={{ minWidth: 140 }}>Action</th></tr></thead>
+                    <thead><tr><th style={{ width: 90 }}>Type</th><th>Question</th><th>Correct Answer</th><th style={{ minWidth: 140 }}>Action</th></tr></thead>
                     <tbody>
                       {(questionsByDifficulty.get(activeDifficulty) || []).slice().reverse().map((q) => {
-                        const ex = q.examples || [];
+                        const oldCode = q.type !== "text" && q.type !== "mcq";
                         return (
-                          <tr key={q._id}>
-                            <td className="fw-bold text-dark" style={{ maxWidth: 200 }}>{q.title}</td>
-                            <td><code>{q.correctOutput || q.funcName}</code></td>
-                            <td className="small text-muted" style={{ lineHeight: 1.6 }}>
-                              <div><span className="fw-bold">Ex1:</span> In: {ex[0]?.input ?? "N/A"} | Out: {ex[0]?.output ?? "N/A"}</div>
-                              <div><span className="fw-bold">Ex2:</span> In: {ex[1]?.input ?? "N/A"} | Out: {ex[1]?.output ?? "N/A"}</div>
-                              <div><span className="fw-bold">Ex3:</span> In: {ex[2]?.input ?? "N/A"} | Out: {ex[2]?.output ?? "N/A"}</div>
+                          <tr key={q._id} style={oldCode ? { opacity: 0.6 } : undefined}>
+                            <td>
+                              <span className="badge bg-secondary">{q.type === "mcq" ? "MCQ" : q.type === "text" ? "Text" : "Old code"}</span>
+                            </td>
+                            <td className="text-dark" style={{ maxWidth: 320, whiteSpace: "pre-wrap" }}>
+                              {q.description}
+                              {q.type === "mcq" && (
+                                <div className="small text-muted mt-1">
+                                  {(q.options || []).map((o, i) => <div key={i}>{OPTION_LETTERS[i]}. {o}</div>)}
+                                </div>
+                              )}
                             </td>
                             <td>
-                              <button type="button" className="btn-edit mb-1 me-1" onClick={() => startEdit(q)}>Edit</button>
+                              {q.type === "mcq" ? <code>{OPTION_LETTERS[q.correctIndex]}. {(q.options || [])[q.correctIndex]}</code>
+                                : q.type === "text" ? <code style={{ whiteSpace: "pre-wrap" }}>{q.answer}</code>
+                                : <span className="small text-muted">Not used in Round 2 now</span>}
+                            </td>
+                            <td>
+                              {!oldCode && <button type="button" className="btn-edit mb-1 me-1" onClick={() => startEdit(q)}>Edit</button>}
                               <button type="button" className="btn-clear" onClick={() => handleCqDelete(q._id)}>Delete</button>
                             </td>
                           </tr>

@@ -1,22 +1,20 @@
-// Round 2 Coding Question Bank <-> Excel/CSV round-trip.
-// Same approach as questionCsv.js (Round 1's Question Bank): a plain .csv,
-// no `xlsx` npm dependency — Excel/Sheets/LibreOffice all open, edit and
-// re-save .csv natively, so download -> edit -> re-upload works the same
-// as a real .xlsx would.
+// Round 2 Question Bank <-> Excel/CSV round-trip.
+// A plain .csv (no `xlsx` npm dependency) - Excel / Sheets / LibreOffice all open,
+// edit and re-save .csv, so download -> edit -> re-upload works.
 //
-// Column order matches the "Manage Round 2 Coding Questions" form fields:
-// Title | Difficulty (Easy/Medium/Hard) | Description | Ex1 Input | Ex1 Output |
-// Ex2 Input | Ex2 Output | Ex3 Input | Ex3 Output | Correct Output
+// Columns:
+// Type | Difficulty | Question | Correct Answer | Option A | Option B | Option C | Option D | Correct Option
 //
-// Note: "Input" columns are the comma-separated argument list exactly as
-// typed into the "Ex N Input" fields on the form (e.g. "1, 2, 3"), not a
-// pre-built JSON array — the same text the form itself expects.
+//  - Type "Text"  : fill "Correct Answer" (the candidate must type exactly this).
+//  - Type "MCQ"   : fill Option A-D (at least 2) and "Correct Option" (A, B, C or D).
+// The order of the rows is the order the questions are added.
 
 export const CODING_CSV_HEADERS = [
-  "Title", "Difficulty", "Description",
-  "Ex1 Input", "Ex1 Output", "Ex2 Input", "Ex2 Output", "Ex3 Input", "Ex3 Output",
-  "Correct Output"
+  "Type", "Difficulty", "Question", "Correct Answer",
+  "Option A", "Option B", "Option C", "Option D", "Correct Option"
 ];
+
+const LETTERS = ["A", "B", "C", "D"];
 
 function csvEscape(value) {
   const str = String(value ?? "");
@@ -24,35 +22,32 @@ function csvEscape(value) {
   return str;
 }
 
-// Builds the downloadable CSV text for the current coding-question bank. If
-// the bank is empty, includes one example row so the admin sees the
-// expected format immediately instead of a bare header row.
 export function buildCodingQuestionsCSV(questions) {
-  const rows = questions.length > 0
-    ? questions.map((q) => {
-        const ex = q.examples || [];
+  const usable = questions.filter((q) => q.type === "text" || q.type === "mcq");
+  const rows = usable.length > 0
+    ? usable.map((q) => {
+        const opts = q.options || [];
         return [
-          q.title || "",
+          q.type === "mcq" ? "MCQ" : "Text",
           q.difficulty || "Medium",
           q.description || "",
-          ex[0]?.input ?? "",
-          ex[0]?.output ?? "",
-          ex[1]?.input ?? "",
-          ex[1]?.output ?? "",
-          ex[2]?.input ?? "",
-          ex[2]?.output ?? "",
-          q.correctOutput || ""
+          q.type === "text" ? (q.answer || "") : "",
+          opts[0] ?? "", opts[1] ?? "", opts[2] ?? "", opts[3] ?? "",
+          q.type === "mcq" && Number.isInteger(q.correctIndex) ? LETTERS[q.correctIndex] || "" : ""
         ];
       })
-    : [["Find Max Element", "Easy", "Return the largest number in the given array.", "1, 2, 3", "3", "-1, -2", "-1", "10, 20", "20", "20"]];
+    : [
+        ["Text", "Easy", "Write the full form of HTML.", "HyperText Markup Language", "", "", "", "", ""],
+        ["MCQ", "Easy", "What is the default port of HTTPS?", "", "80", "443", "21", "8080", "B"]
+      ];
 
   const lines = [CODING_CSV_HEADERS, ...rows].map((row) => row.map(csvEscape).join(","));
   return lines.join("\r\n");
 }
 
-export function downloadCodingQuestionsCSV(questions, filename = "round2-coding-questions.csv") {
+export function downloadCodingQuestionsCSV(questions, filename = "round2-questions.csv") {
   const csv = buildCodingQuestionsCSV(questions);
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }); // BOM so Excel picks UTF-8
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM so Excel picks UTF-8
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -63,7 +58,7 @@ export function downloadCodingQuestionsCSV(questions, filename = "round2-coding-
   URL.revokeObjectURL(url);
 }
 
-// Minimal RFC4180-style CSV line splitter — handles quoted fields that
+// Minimal RFC4180-style CSV line splitter - handles quoted fields that
 // contain commas, escaped "" quotes, and \r\n or \n line endings.
 function parseCSVText(text) {
   const rows = [];
@@ -96,33 +91,44 @@ function parseCSVText(text) {
 
 const VALID_DIFFICULTY = new Set(["Easy", "Medium", "Hard"]);
 
-// Parses uploaded CSV text into { rows, skipped }. `rows` are plain field
-// objects (title/difficulty/description/ex1In/ex1Out/.../correctOutput) —
-// the caller (Round2Tab) turns each into the full CodingQuestion payload
-// (funcName, starterCode, testCases) using the same logic as the manual
-// "Add Coding Problem" form, so uploaded rows behave identically either way.
+// Short heading kept in the bank list: the first part of the question.
+export function titleFromQuestion(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  return t.length > 80 ? t.slice(0, 77) + "..." : t;
+}
+
+// Parses uploaded CSV text into { questions, skipped }. `questions` are ready to
+// send to the server (type, difficulty, description, answer / options + correctIndex).
 export function parseCodingQuestionsCSV(text) {
   const parsed = parseCSVText(text);
-  if (parsed.length === 0) return { rows: [], skipped: 0 };
+  if (parsed.length === 0) return { questions: [], skipped: 0 };
 
   const firstCell = (parsed[0][0] || "").trim().toLowerCase();
-  const dataRows = firstCell === "title" ? parsed.slice(1) : parsed;
+  const dataRows = firstCell === "type" ? parsed.slice(1) : parsed;
 
-  const rows = [];
+  const questions = [];
   let skipped = 0;
 
   dataRows.forEach((r) => {
-    const [title, difficultyRaw, description, ex1In, ex1Out, ex2In, ex2Out, ex3In, ex3Out, correctOutput] =
-      r.map((c) => (c || "").trim());
-
+    const [typeRaw, difficultyRaw, question, answer, a, b, c, d, correctRaw] = r.map((x) => (x || "").trim());
+    const type = /^mcq$/i.test(typeRaw) ? "mcq" : /^text$/i.test(typeRaw) ? "text" : "";
     const difficulty = VALID_DIFFICULTY.has(difficultyRaw) ? difficultyRaw : "Medium";
+    if (!type || !question) { skipped++; return; }
 
-    if (!title || !description || !ex1In || !ex1Out || !ex2In || !ex2Out || !ex3In || !ex3Out || !correctOutput) {
-      skipped++;
+    if (type === "text") {
+      if (!answer) { skipped++; return; }
+      questions.push({ type, title: titleFromQuestion(question), difficulty, description: question, answer });
       return;
     }
-    rows.push({ title, difficulty, description, ex1In, ex1Out, ex2In, ex2Out, ex3In, ex3Out, correctOutput });
+    const options = [a, b, c, d].filter((o) => o !== "");
+    const letter = (correctRaw || "").toUpperCase();
+    const correctIndex = [a, b, c, d].findIndex((_, i) => LETTERS[i] === letter);
+    // The correct letter must point at a filled option.
+    if (options.length < 2 || correctIndex < 0 || ![a, b, c, d][correctIndex]) { skipped++; return; }
+    // Empty options in the middle are not allowed: use only the filled ones in order.
+    const fixedIndex = options.indexOf([a, b, c, d][correctIndex]);
+    questions.push({ type, title: titleFromQuestion(question), difficulty, description: question, options, correctIndex: fixedIndex });
   });
 
-  return { rows, skipped };
+  return { questions, skipped };
 }

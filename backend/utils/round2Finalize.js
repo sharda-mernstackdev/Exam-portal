@@ -6,6 +6,7 @@ const Exam = require('../models/Exam');
 const { sendFinalSuccessEmail } = require('./mailer');
 const { getActiveCodingQuestions } = require('../controllers/codingQuestionController');
 const { logViolation } = require('./violation');
+const { isCorrectText, isCorrectMcq, chosenIndex } = require('./round2Grade');
 
 // Round 2 timer rules (Campus mode) - all enforced on the server.
 //  - The candidate's deadline is fixed by the server when Begin is pressed.
@@ -42,37 +43,43 @@ async function getRound2DurationMinutes() {
 }
 
 // Cleans + validates answers against the real Round 2 paper (unknown and
-// duplicate questions dropped, `passed` clamped to 0..total).
+// duplicate questions dropped) and MARKS every answer on the server: one mark
+// for a correct answer, none otherwise. A question the candidate did not answer
+// is stored empty with no mark, so the admin sees every question of the paper.
 function cleanAnswers(paper, clientAnswers) {
   const byId = new Map(paper.map((q) => [String(q._id), q]));
   const byTitle = new Map(paper.map((q) => [String(q.title || '').trim().toLowerCase(), q]));
   const seen = new Set();
-  const cleaned = [];
+  const given = [];
   let unknown = 0;
   let duplicate = 0;
-  let overReported = 0;
   (Array.isArray(clientAnswers) ? clientAnswers : []).forEach((a) => {
     const dbq = (a && a.questionId && byId.get(String(a.questionId))) ||
       (a && byTitle.get(String(a.title || '').trim().toLowerCase()));
     if (!dbq) { unknown++; return; }
     if (seen.has(String(dbq._id))) { duplicate++; return; }
     seen.add(String(dbq._id));
-    const total = Array.isArray(dbq.testCases) ? dbq.testCases.length : 0;
-    let passed = Number(a.passed);
-    if (!Number.isFinite(passed) || passed < 0) passed = 0;
-    passed = Math.floor(passed);
-    if (passed > total) { overReported++; passed = total; }
-    const lang = ['javascript', 'python', 'cpp'].includes(a.language) ? a.language : 'javascript';
-    cleaned.push({
-      questionId: dbq._id,
-      title: dbq.title,
-      code: String(a.code || '').slice(0, 50000),
-      language: lang,
-      passed,
-      total
-    });
+    given.push({ dbq, raw: String((a && a.code) === undefined || (a && a.code) === null ? '' : a.code).slice(0, 5000) });
   });
-  return { cleaned, unknown, duplicate, overReported };
+
+  const cleaned = given.map(({ dbq, raw }) => {
+    let passed = 0;
+    let code = raw;
+    if (dbq.type === 'mcq') {
+      const idx = chosenIndex(dbq, raw);
+      passed = isCorrectMcq(dbq, raw) ? 1 : 0;
+      code = idx >= 0 ? dbq.options[idx] : '';
+    } else {
+      passed = isCorrectText(dbq, raw) ? 1 : 0;
+    }
+    return { questionId: dbq._id, title: dbq.title, type: dbq.type, code, language: dbq.type, passed, total: 1 };
+  });
+  // Questions that were not answered at all still appear in the result (empty, no mark).
+  paper.forEach((q) => {
+    if (seen.has(String(q._id))) return;
+    cleaned.push({ questionId: q._id, title: q.title, type: q.type, code: '', language: q.type, passed: 0, total: 1 });
+  });
+  return { cleaned, unknown, duplicate };
 }
 
 // Saves the Round 2 result and closes the attempt. The ONE place where a Round
@@ -120,14 +127,14 @@ async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason
       : answers;
 
     const paper = await getActiveCodingQuestions();
-    const { cleaned, unknown, duplicate, overReported } = cleanAnswers(paper, source);
+    const { cleaned, unknown, duplicate } = cleanAnswers(paper, source);
 
     const computedScore = cleaned.reduce((n, a) => n + a.passed, 0);
-    if ((!useDraft && Number(totalScore) !== computedScore) || unknown || duplicate || overReported) {
+    if (unknown || duplicate) {
       await logViolation(
         studentId,
         'server_round2_mismatch',
-        `Round 2 submission differs from the server's view: client score ${totalScore}, server score ${computedScore}, unknown questions ${unknown}, duplicates ${duplicate}, passed>total ${overReported}.`,
+        `Round 2 submission differs from the server's view: unknown questions ${unknown}, duplicates ${duplicate}.`,
         'round2-submit'
       );
     }
@@ -140,7 +147,7 @@ async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason
       );
     }
 
-    // Round 2 pass criteria (unchanged): at least 75% of the paper's questions.
+    // Round 2 pass criteria: at least 75% of the paper's questions answered correctly.
     const paperCount = paper.length || (cleaned.length || 1);
     const round2Status = computedScore >= paperCount * 0.75 ? 'PASS' : 'FAIL';
 

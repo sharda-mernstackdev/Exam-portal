@@ -9,6 +9,8 @@ const SecondLevelResultSchema = new mongoose.Schema(
       {
         questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'CodingQuestion' },
         title: String,
+        type: String,
+        // text question: what the candidate typed; mcq: the option text they chose
         code: String,
         language: String,
         passed: Number,

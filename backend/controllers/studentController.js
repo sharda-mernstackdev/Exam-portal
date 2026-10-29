@@ -5,6 +5,7 @@ const ExamAssignment = require('../models/ExamAssignment');
 const ProctorLog = require('../models/ProctorLog');
 const { scheduleRound2Mails, scheduleFinalMails } = require('../utils/round2Manual');
 const { isMailConfigured } = require('../utils/mailer');
+const { repairStuckRound2 } = require('../utils/round2Finalize');
 
 // GET /api/admin/students — "Registered Students" tab in admin dashboard
 exports.listStudents = async (req, res) => {
@@ -56,6 +57,7 @@ exports.deleteStudent = async (req, res) => {
 // full two-round journey (Round 1 result, Round 2 eligibility/result, final
 // status), for the admin Results Report tab.
 exports.candidateJourney = async (req, res) => {
+  try { await repairStuckRound2(); } catch (e) { console.error('Round 2 repair error:', e.message); }
   const students = await Student.find({}, '-passwordHash');
   const submissions = await Submission.find().sort({ createdAt: -1 });
   const secondResults = await SecondLevelResult.find().sort({ createdAt: -1 });

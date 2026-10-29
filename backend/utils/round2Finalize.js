@@ -167,11 +167,18 @@ async function finalizeRound2({ studentId, answers, totalScore, useDraft, reason
     // Offline exams (entered through the exam's own address): no automatic
     // mail - the admin sends it with the "Send HR round mail" button.
     const offline = await ExamAssignment.exists({ student: student._id, round: 1, entryMode: 'campus' });
-    if (round2Status === 'PASS' && !student.finalEmailSentAt && !offline) {
-      await sendFinalSuccessEmail(student);
-      student.finalEmailSentAt = new Date();
-    }
+    // Save the Round 2 outcome FIRST, so a mail problem can never leave the
+    // candidate without a pass/fail status.
     await student.save();
+    if (round2Status === 'PASS' && !student.finalEmailSentAt && !offline) {
+      try {
+        await sendFinalSuccessEmail(student);
+        student.finalEmailSentAt = new Date();
+        await student.save();
+      } catch (mailErr) {
+        console.error('Round 2 pass mail could not be sent:', mailErr.message);
+      }
+    }
 
     return { status: 201, body: result };
   } catch (err) {
@@ -243,7 +250,57 @@ async function finalizeIfExpired(studentId) {
   return 'failed';
 }
 
+// Repairs Round 2 attempts that have no usable result:
+//  1. campus attempt whose deadline (+ grace) has passed but was never
+//     finalized (the deadline sweeper only runs on the live site) -> finalized
+//     from the last saved draft.
+//  2. completed, NO result -> re-finalized from the last saved draft.
+//  3. completed, result exists but status still PENDING -> status copied
+//     from the result.
+// Safe to run any number of times.
+async function repairStuckRound2() {
+  let repaired = 0;
+
+  // 1) Expired campus attempts that nobody finalized.
+  const expired = await Student.find({
+    round2Completed: { $ne: true },
+    round2Mode: { $ne: 'online' },
+    round2DeadlineAt: { $lte: new Date(Date.now() - SUBMIT_GRACE_MS) }
+  }).select('_id');
+  for (const st of expired) {
+    try {
+      const out = await finalizeIfExpired(st._id);
+      if (out === 'finalized') repaired++;
+    } catch (e) {
+      console.error('Round 2 expiry repair failed for', String(st._id), e.message);
+    }
+  }
+
+  // 2) + 3) Completed but result / status missing.
+  const stuck = await Student.find({
+    round2Completed: true,
+    'roundProgress.r2': { $nin: ['PASS', 'FAIL'] }
+  }).select('_id');
+  for (const st of stuck) {
+    try {
+      const result = await SecondLevelResult.findOne({ student: st._id }).sort({ createdAt: -1 });
+      if (result) {
+        await Student.updateOne({ _id: st._id }, { $set: { 'roundProgress.r2': result.round2Status } });
+        repaired++;
+        continue;
+      }
+      await Student.updateOne({ _id: st._id }, { $set: { round2Completed: false } });
+      const out = await finalizeRound2({ studentId: st._id, useDraft: true, reason: 'recovered' });
+      if (out.status === 201) repaired++;
+    } catch (e) {
+      console.error('Round 2 repair failed for', String(st._id), e.message);
+    }
+  }
+  return repaired;
+}
+
 module.exports = {
+  repairStuckRound2,
   DRAFT_GRACE_MS,
   SUBMIT_GRACE_MS,
   ONLINE_SUBMIT_GRACE_MS,

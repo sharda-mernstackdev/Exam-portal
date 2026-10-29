@@ -9,7 +9,9 @@ const SecondLevelResultSchema = new mongoose.Schema(
       {
         questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'CodingQuestion' },
         title: String,
-        type: String,
+        // NOTE: a field called "type" must be written as { type: { type: String } },
+        // otherwise Mongoose reads it as the data type of the whole answers array.
+        type: { type: String },
         // text question: what the candidate typed; mcq: the option text they chose
         code: String,
         language: String,

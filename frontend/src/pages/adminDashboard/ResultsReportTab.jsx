@@ -80,9 +80,13 @@ function isRound2MailScheduled(row) {
 function formatClock(d) {
   return new Date(d).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
-// A candidate who passed Round 2 and has not been sent the HR-round mail yet.
+// A candidate who passed Round 2 and has neither been sent nor scheduled for the HR-round mail.
 function isFinalMailPending(row) {
-  return row.finalStatus === "CLEARED_BOTH" && !row.finalEmailSent;
+  return row.finalStatus === "CLEARED_BOTH" && !row.finalEmailSent && !row.finalEmailDueAt;
+}
+// Passed Round 2, HR mail already scheduled (it goes out 10 minutes after the admin pressed the button).
+function isFinalMailScheduled(row) {
+  return row.finalStatus === "CLEARED_BOTH" && !row.finalEmailSent && !!row.finalEmailDueAt;
 }
 
 // Groups the candidates who still need a mail by exam (for the per-exam buttons).
@@ -122,28 +126,20 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
   // kind: "round2" | "final". scope: { examId?, studentIds? }.
   function sendMails(kind, scope, busyKey, what) {
     if (mailBusy) return;
-    const when = kind === "final" ? "Send the HR round mail now" : "Send the Round 2 mail (it goes out 10 minutes after you press OK)";
+    const when = kind === "final" ? "Send the HR round mail (it goes out 10 minutes after you press OK)" : "Send the Round 2 mail (it goes out 10 minutes after you press OK)";
     if (!window.confirm(`${when} to ${what}? Candidates who already received it will be skipped.`)) return;
     setMailBusy(busyKey);
     setMailMsg(null);
     const call = kind === "final" ? ExamAPI.adminSendFinalEmails : ExamAPI.adminSendRound2Emails;
     call(scope)
       .then((res) => {
-        if (kind === "round2") {
-          // The Round 2 mail is scheduled: it goes out 10 minutes after the button press.
-          setMailMsg({
-            type: res.scheduled ? "success" : "warning",
-            text: res.scheduled
-              ? `Round 2 mail scheduled for ${res.scheduled} candidate(s). It will be sent in ${res.delayMinutes} minutes (around ${formatClock(res.sendAt)}).`
-              : "Nobody new to schedule - everyone who passed Round 1 already has the mail sent or scheduled."
-          });
-          return;
-        }
-        const failed = (res.failed || []).length;
+        // The mail is scheduled: it goes out 10 minutes after the button press.
+        const label = kind === "final" ? "HR round mail" : "Round 2 mail";
         setMailMsg({
-          type: failed ? "warning" : "success",
-          text: `Mail sent to ${res.sent} of ${res.total} candidate(s).` +
-            (failed ? ` ${failed} failed (${res.failed.map((f) => f.email).join(", ")}) - press the button again to retry them.` : "")
+          type: res.scheduled ? "success" : "warning",
+          text: res.scheduled
+            ? `${label} scheduled for ${res.scheduled} candidate(s). It will be sent in ${res.delayMinutes} minutes (around ${formatClock(res.sendAt)}).`
+            : `Nobody new to schedule - everyone who passed ${kind === "final" ? "Round 2" : "Round 1"} already has the mail sent or scheduled.`
         });
       })
       .catch((err) => setMailMsg({ type: "danger", text: err.message || "Could not send the mails." }))
@@ -204,6 +200,26 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
       setMailMsg({ type: "warning", text: "The Round 2 mail has already been sent to all Offline candidates who passed Round 1." });
     } else {
       setMailMsg({ type: "warning", text: "The Round 2 mail is already scheduled for the Offline candidates who passed Round 1. It will go out shortly." });
+    }
+  }
+  // OFFLINE candidates who passed Round 2 and still need the HR round mail.
+  const offlineFinalPending = useMemo(() => journey.filter((r) => modeOf(r) === "offline" && isFinalMailPending(r)), [journey]);
+
+  // Small "Send HR round mail" button shown with the "Round 2 Passed" filter. It stays visible
+  // after the mails are sent: pressing it then only tells the admin they were already sent / scheduled.
+  function sendFinalToOfflinePassed() {
+    if (mailBusy) return;
+    if (offlineFinalPending.length > 0) {
+      sendMails("final", { studentIds: offlineFinalPending.map((r) => r.studentId) }, "offline-final-all", `${offlineFinalPending.length} Offline candidate(s) who passed Round 2`);
+      return;
+    }
+    const passed = journey.filter((r) => modeOf(r) === "offline" && r.finalStatus === "CLEARED_BOTH");
+    if (passed.length === 0) {
+      setMailMsg({ type: "warning", text: "No Offline candidate has passed Round 2 yet." });
+    } else if (passed.every((r) => r.finalEmailSent)) {
+      setMailMsg({ type: "warning", text: "The HR round mail has already been sent to all Offline candidates who passed Round 2." });
+    } else {
+      setMailMsg({ type: "warning", text: "The HR round mail is already scheduled for the Offline candidates who passed Round 2. It will go out shortly." });
     }
   }
   const counts = useMemo(() => {
@@ -280,7 +296,7 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
         <h6><i className="fa-solid fa-envelope me-2"></i>Send mails</h6>
         <div className="sub mb-3">
           Mails go only when you press a button here, and nobody gets the same mail twice. The Round 2 mail is sent 10 minutes
-          after you press the button; the HR round mail is sent right away. A button for an exam covers every batch of that
+          after you press the button; the HR round mail is also sent 10 minutes after you press the button. A button for an exam covers every batch of that
           exam, however many times it was held.
         </div>
         <div className="small mb-3 p-2 rounded-2" style={{ background: "#f1f5f9" }}>
@@ -390,6 +406,14 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
                 {mailBusy === "offline-pass-all" ? "Please wait..." : "Send Round 2 mail"}
               </button>
             )}
+            {filter === "r2_passed" && modeFilter !== "online" && (
+              <button type="button" className="btn btn-sm btn-primary fw-bold" disabled={!!mailBusy}
+                title="Sends the HR round mail (10 minutes after you confirm) to every Offline candidate who passed Round 2. Candidates who already got it are skipped."
+                onClick={sendFinalToOfflinePassed}>
+                <i className="fa-solid fa-paper-plane me-1"></i>
+                {mailBusy === "offline-final-all" ? "Please wait..." : "Send HR round mail"}
+              </button>
+            )}
             <input
               type="text"
               className="form-control form-control-sm"
@@ -400,7 +424,7 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
             />
           </div>
         </div>
-        {filter === "r1_passed" && modeFilter !== "online" && mailMsg && (
+        {(filter === "r1_passed" || filter === "r2_passed") && modeFilter !== "online" && mailMsg && (
           <div className={`alert alert-${mailMsg.type} small py-2 mb-3`}>{mailMsg.text}</div>
         )}
 
@@ -456,6 +480,7 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
                         {FINAL_STATUS_LABEL[r.finalStatus] || r.finalStatus}
                       </span>
                       {r.finalEmailSent && <div className="small text-muted mt-1"><i className="fa-solid fa-envelope-circle-check me-1"></i>Final email sent</div>}
+                      {isFinalMailScheduled(r) && <div className="small text-muted mt-1"><i className="fa-solid fa-clock me-1"></i>HR mail goes at {formatClock(r.finalEmailDueAt)}</div>}
                       {isFinalMailPending(r) && (
                         <button type="button" className="btn btn-sm btn-outline-primary mt-1" disabled={!!mailBusy}
                           onClick={() => sendMails("final", { studentIds: [r.studentId] }, "frow-" + r.studentId, r.name)}>

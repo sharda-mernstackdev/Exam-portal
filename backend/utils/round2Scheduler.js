@@ -1,7 +1,7 @@
 const Student = require('../models/Student');
 const Settings = require('../models/Settings');
 const SecondLevelExam = require('../models/SecondLevelExam');
-const { sendRound2InvitationEmail } = require('./mailer');
+const { sendRound2InvitationEmail, sendFinalSuccessEmail } = require('./mailer');
 const { offlineSlugFor } = require('./round2Manual');
 
 // Round 2 invitation goes out this many minutes AFTER Round 1 has ended
@@ -67,6 +67,43 @@ async function sendDueRound2Emails() {
   }
 }
 
+// HR-round mails the admin scheduled (button on the Results Report page) whose
+// time has come. Each candidate is claimed with one atomic update first, so a
+// restart or a second backend can never send the same mail twice.
+let runningFinal = false;
+
+async function sendDueFinalEmails() {
+  if (runningFinal) return;
+  runningFinal = true;
+  try {
+    for (;;) {
+      const student = await Student.findOneAndUpdate(
+        {
+          'roundProgress.r2': 'PASS',
+          finalEmailSentAt: null,
+          finalEmailDueAt: { $lte: new Date() }
+        },
+        { $set: { finalEmailSentAt: new Date() } },
+        { new: true }
+      );
+      if (!student) break;
+      const result = await sendFinalSuccessEmail(student);
+      if (!result.sent) {
+        // Sending failed (or SMTP not configured): release the claim so the
+        // next run retries.
+        console.warn(`[hr-mail] could not send to ${student.email}: ${result.reason}`);
+        await Student.updateOne({ _id: student._id }, { $unset: { finalEmailSentAt: 1 } });
+        break;
+      }
+      console.log(`[hr-mail] HR round mail sent to ${student.email}`);
+    }
+  } catch (err) {
+    console.error('[hr-mail] scheduler error:', err.message);
+  } finally {
+    runningFinal = false;
+  }
+}
+
 // Every running backend that points at the same database runs this scheduler.
 // A backend started on a developer machine (FRONTEND_URL = localhost) would
 // grab students first and send them mails with a localhost link, so it only
@@ -82,7 +119,9 @@ function startRound2Scheduler() {
     return;
   }
   setInterval(sendDueRound2Emails, 60 * 1000);
+  setInterval(sendDueFinalEmails, 60 * 1000);
   sendDueRound2Emails();
+  sendDueFinalEmails();
 }
 
-module.exports = { startRound2Scheduler, sendDueRound2Emails, computeRound2EmailDueAt, ROUND2_EMAIL_DELAY_MINUTES };
+module.exports = { startRound2Scheduler, sendDueRound2Emails, sendDueFinalEmails, computeRound2EmailDueAt, ROUND2_EMAIL_DELAY_MINUTES };

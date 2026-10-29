@@ -64,7 +64,10 @@ const StudentSchema = new mongoose.Schema(
         { _id: false, questionId: String, code: String, language: String, passed: Number }
       ]
     },
-    finalEmailSentAt: { type: Date }
+    finalEmailSentAt: { type: Date },
+    // When the HR-round mail becomes due (offline exams: 10 minutes after the admin
+    // presses "Send HR round mail").
+    finalEmailDueAt: { type: Date }
   },
   { timestamps: true }
 );

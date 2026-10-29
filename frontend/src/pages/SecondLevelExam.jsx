@@ -142,6 +142,8 @@ export default function SecondLevelExam() {
   const [submitting, setSubmitting] = useState(false);
   const [clipMsg, setClipMsg] = useState("");
   const clipMsgTimerRef = useRef(null);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const savedTimerRef = useRef(null);
   const lastClipLogRef = useRef(0);
 
   // Source of truth for the candidate's answers: answersRef.current[questionId]
@@ -461,6 +463,17 @@ export default function SecondLevelExam() {
   }
   function handlePrev() {
     if (currentIndex > 0) loadQuestionInto(currentIndex - 1);
+  }
+  // Save: the answer is already kept (in memory + on this browser) on every key /
+  // click, so this just writes the current answer once more and shows "Saved".
+  // It does not lock the answer - it can still be changed before Complete Exam.
+  function handleSave() {
+    if (locked || !questions) return;
+    const cur = questions[currentIndex];
+    writeDraft(draftAnswerKey(draftOwnerRef.current, cur.id), answersRef.current[cur.id] || "");
+    setSavedMsg(true);
+    clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setSavedMsg(false), 2000);
   }
 
   // ---- No copy / cut / paste in the answer box ----
@@ -791,9 +804,13 @@ export default function SecondLevelExam() {
                         <i className="fa-solid fa-chevron-left me-1"></i> Prev
                       </button>
                     </div>
-                    <div>
-                      <button className="btn btn-primary px-4 fw-bold" onClick={handleNext}>
-                        {currentIndex === questions.length - 1 ? (<><i className="fa-solid fa-floppy-disk me-1"></i> Save</>) : (<>Next <i className="fa-solid fa-chevron-right ms-1"></i></>)}
+                    <div className="d-flex align-items-center">
+                      {savedMsg && <span className="text-success fw-bold small me-3"><i className="fa-solid fa-circle-check me-1"></i>Answer saved</span>}
+                      <button className="btn btn-success px-4 fw-bold me-2" disabled={locked} onClick={handleSave}>
+                        <i className="fa-solid fa-floppy-disk me-1"></i> Save
+                      </button>
+                      <button className="btn btn-primary px-4 fw-bold" disabled={currentIndex === questions.length - 1} onClick={handleNext}>
+                        Next <i className="fa-solid fa-chevron-right ms-1"></i>
                       </button>
                     </div>
                   </div>

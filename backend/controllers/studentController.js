@@ -3,7 +3,7 @@ const Submission = require('../models/Submission');
 const SecondLevelResult = require('../models/SecondLevelResult');
 const ExamAssignment = require('../models/ExamAssignment');
 const ProctorLog = require('../models/ProctorLog');
-const { scheduleRound2Mails, sendFinalMailsNow } = require('../utils/round2Manual');
+const { scheduleRound2Mails, scheduleFinalMails } = require('../utils/round2Manual');
 const { isMailConfigured } = require('../utils/mailer');
 
 // GET /api/admin/students — "Registered Students" tab in admin dashboard
@@ -107,7 +107,8 @@ exports.candidateJourney = async (req, res) => {
       round2: r2 ? { score: r2.totalScore, status: r2.round2Status, submittedOn: r2.createdAt } : null,
       round2Completed: student.round2Completed,
       finalStatus,
-      finalEmailSent: !!student.finalEmailSentAt
+      finalEmailSent: !!student.finalEmailSentAt,
+      finalEmailDueAt: student.finalEmailDueAt || null
     };
   });
 
@@ -134,16 +135,18 @@ exports.sendRound2Emails = async (req, res) => {
   }
 };
 
-// POST /api/admin/final/send-emails - "Send HR round mail" buttons: sends right
-// away to candidates who passed Round 2 and have not been mailed yet.
+// POST /api/admin/final/send-emails - "Send HR round mail" buttons.
+// Body (all optional): { examId, studentIds }. Schedules the HR round mail,
+// 10 minutes from now, for every candidate in that scope who passed Round 2 and
+// has not been mailed or scheduled yet. Replies { scheduled, sendAt, delayMinutes }.
 exports.sendFinalEmails = async (req, res) => {
   try {
     if (!isMailConfigured()) return mailNotSetUp(res);
     const { examId, studentIds } = req.body || {};
-    res.json(await sendFinalMailsNow({ examId, studentIds }));
+    res.json(await scheduleFinalMails({ examId, studentIds }));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ message: err.message });
     console.error(err);
-    res.status(500).json({ message: 'Could not send the HR round mails.' });
+    res.status(500).json({ message: 'Could not schedule the HR round mails.' });
   }
 };

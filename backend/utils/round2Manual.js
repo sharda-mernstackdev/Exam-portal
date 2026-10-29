@@ -1,7 +1,6 @@
 const Student = require('../models/Student');
 const Settings = require('../models/Settings');
 const ExamAssignment = require('../models/ExamAssignment');
-const { sendFinalSuccessEmail } = require('./mailer');
 
 // Admin mail buttons (Results Report page) for OFFLINE exams.
 //
@@ -13,13 +12,15 @@ const { sendFinalSuccessEmail } = require('./mailer');
 //   arrives. Pressing again never schedules or sends anybody twice.
 //
 // HR-round mail ("You passed Round 2, you are eligible for the HR round"):
-//   Sent right away to every candidate who passed Round 2 and was not mailed yet.
+//   Same as the Round 2 mail: the admin presses the button and the mail goes to
+//   every candidate who passed Round 2 and has not been mailed yet,
+//   HR_MAIL_DELAY_MINUTES (10 minutes) after the press (sent by the scheduler).
 //
 // Who is included can be narrowed with:
 //   examId     - only candidates of this exam (any number of batches of it)
 //   studentIds - only these candidates (a single row's button)
 const ROUND2_MAIL_DELAY_MINUTES = 10;
-const CONCURRENCY = 5;
+const HR_MAIL_DELAY_MINUTES = 10;
 
 async function candidateScope({ examId, studentIds }) {
   let scope = null; // null = everyone eligible
@@ -64,42 +65,24 @@ async function scheduleRound2Mails(opts = {}) {
   return { scheduled, sendAt, delayMinutes: ROUND2_MAIL_DELAY_MINUTES };
 }
 
-// HR-round mail button: send now. A candidate is claimed with ONE atomic update
-// before the mail is sent, so pressing twice (or two admins at once) can never
-// send the same candidate two mails; a failed send releases the claim so the
-// admin can press the button again to retry just those candidates.
-async function sendFinalMailsNow(opts = {}) {
+// HR-round mail button: schedule the mails 10 minutes from now (same as the
+// Round 2 mail). Only candidates who passed Round 2, were not mailed yet and are
+// not already scheduled are included, so pressing the button again never
+// schedules or sends anybody twice. The scheduler (utils/round2Scheduler.js)
+// sends them when the time arrives.
+async function scheduleFinalMails(opts = {}) {
   const scope = await candidateScope(opts);
-  const base = { 'roundProgress.r2': 'PASS' };
-  const query = { ...base, finalEmailSentAt: null };
-  if (scope) query._id = { $in: [...scope] };
-  const pending = await Student.find(query, '_id email').lean();
+  const filter = {
+    'roundProgress.r2': 'PASS',
+    finalEmailSentAt: null, // not mailed yet
+    finalEmailDueAt: null   // and not already scheduled
+  };
+  if (scope) filter._id = { $in: [...scope] };
 
-  const result = { total: pending.length, sent: 0, failed: [], smtpMissing: false };
-  let next = 0;
-  async function worker() {
-    for (;;) {
-      if (result.smtpMissing) return;
-      const mine = pending[next++];
-      if (!mine) return;
-      const student = await Student.findOneAndUpdate(
-        { _id: mine._id, ...base, finalEmailSentAt: null },
-        { $set: { finalEmailSentAt: new Date() } },
-        { new: true }
-      );
-      if (!student) continue; // somebody else just mailed this candidate
-      const sent = await sendFinalSuccessEmail(student);
-      if (sent.sent) {
-        result.sent++;
-      } else {
-        await Student.updateOne({ _id: student._id }, { $unset: { finalEmailSentAt: 1 } });
-        if (sent.reason === 'smtp_not_configured') result.smtpMissing = true;
-        result.failed.push({ email: student.email, reason: sent.reason });
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, worker));
-  return result;
+  const sendAt = new Date(Date.now() + HR_MAIL_DELAY_MINUTES * 60000);
+  const r = await Student.updateMany(filter, { $set: { finalEmailDueAt: sendAt } });
+  const scheduled = r.modifiedCount !== undefined ? r.modifiedCount : (r.nModified || 0);
+  return { scheduled, sendAt, delayMinutes: HR_MAIL_DELAY_MINUTES };
 }
 
-module.exports = { ROUND2_MAIL_DELAY_MINUTES, scheduleRound2Mails, sendFinalMailsNow, offlineSlugFor };
+module.exports = { ROUND2_MAIL_DELAY_MINUTES, HR_MAIL_DELAY_MINUTES, scheduleRound2Mails, scheduleFinalMails, offlineSlugFor };

@@ -3,14 +3,14 @@
 // edit and re-save .csv, so download -> edit -> re-upload works.
 //
 // Columns:
-// Type | Difficulty | Question | Correct Answer | Option A | Option B | Option C | Option D | Correct Option
+// Type | Question | Correct Answer | Option A | Option B | Option C | Option D | Correct Option
 //
 //  - Type "Text"  : fill "Correct Answer" (the candidate must type exactly this).
 //  - Type "MCQ"   : fill Option A-D (at least 2) and "Correct Option" (A, B, C or D).
 // The order of the rows is the order the questions are added.
 
 export const CODING_CSV_HEADERS = [
-  "Type", "Difficulty", "Question", "Correct Answer",
+  "Type", "Question", "Correct Answer",
   "Option A", "Option B", "Option C", "Option D", "Correct Option"
 ];
 
@@ -29,7 +29,6 @@ export function buildCodingQuestionsCSV(questions) {
         const opts = q.options || [];
         return [
           q.type === "mcq" ? "MCQ" : "Text",
-          q.difficulty || "Medium",
           q.description || "",
           q.type === "text" ? (q.answer || "") : "",
           opts[0] ?? "", opts[1] ?? "", opts[2] ?? "", opts[3] ?? "",
@@ -37,8 +36,8 @@ export function buildCodingQuestionsCSV(questions) {
         ];
       })
     : [
-        ["Text", "Easy", "Write the full form of HTML.", "HyperText Markup Language", "", "", "", "", ""],
-        ["MCQ", "Easy", "What is the default port of HTTPS?", "", "80", "443", "21", "8080", "B"]
+        ["Text", "Write the full form of HTML.", "HyperText Markup Language", "", "", "", "", ""],
+        ["MCQ", "What is the default port of HTTPS?", "", "80", "443", "21", "8080", "B"]
       ];
 
   const lines = [CODING_CSV_HEADERS, ...rows].map((row) => row.map(csvEscape).join(","));
@@ -89,8 +88,6 @@ function parseCSVText(text) {
   return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
 }
 
-const VALID_DIFFICULTY = new Set(["Easy", "Medium", "Hard"]);
-
 // Short heading kept in the bank list: the first part of the question.
 export function titleFromQuestion(text) {
   const t = String(text || "").replace(/\s+/g, " ").trim();
@@ -98,26 +95,29 @@ export function titleFromQuestion(text) {
 }
 
 // Parses uploaded CSV text into { questions, skipped }. `questions` are ready to
-// send to the server (type, difficulty, description, answer / options + correctIndex).
+// send to the server (type, description, answer / options + correctIndex).
 export function parseCodingQuestionsCSV(text) {
   const parsed = parseCSVText(text);
   if (parsed.length === 0) return { questions: [], skipped: 0 };
 
   const firstCell = (parsed[0][0] || "").trim().toLowerCase();
   const dataRows = firstCell === "type" ? parsed.slice(1) : parsed;
+  // Files downloaded earlier still have a "Difficulty" column after "Type": it is ignored.
+  const hasDifficulty = firstCell === "type" && (parsed[0][1] || "").trim().toLowerCase() === "difficulty";
 
   const questions = [];
   let skipped = 0;
 
   dataRows.forEach((r) => {
-    const [typeRaw, difficultyRaw, question, answer, a, b, c, d, correctRaw] = r.map((x) => (x || "").trim());
+    const cells = r.map((x) => (x || "").trim());
+    if (hasDifficulty) cells.splice(1, 1);
+    const [typeRaw, question, answer, a, b, c, d, correctRaw] = cells;
     const type = /^mcq$/i.test(typeRaw) ? "mcq" : /^text$/i.test(typeRaw) ? "text" : "";
-    const difficulty = VALID_DIFFICULTY.has(difficultyRaw) ? difficultyRaw : "Medium";
     if (!type || !question) { skipped++; return; }
 
     if (type === "text") {
       if (!answer) { skipped++; return; }
-      questions.push({ type, title: titleFromQuestion(question), difficulty, description: question, answer });
+      questions.push({ type, title: titleFromQuestion(question), description: question, answer });
       return;
     }
     const options = [a, b, c, d].filter((o) => o !== "");
@@ -127,7 +127,7 @@ export function parseCodingQuestionsCSV(text) {
     if (options.length < 2 || correctIndex < 0 || ![a, b, c, d][correctIndex]) { skipped++; return; }
     // Empty options in the middle are not allowed: use only the filled ones in order.
     const fixedIndex = options.indexOf([a, b, c, d][correctIndex]);
-    questions.push({ type, title: titleFromQuestion(question), difficulty, description: question, options, correctIndex: fixedIndex });
+    questions.push({ type, title: titleFromQuestion(question), description: question, options, correctIndex: fixedIndex });
   });
 
   return { questions, skipped };

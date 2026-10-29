@@ -10,8 +10,8 @@ import { isMobileDevice } from "./utils/device";
 // Set VITE_API_URL (e.g. https://your-backend.example.com/api) in the
 // frontend's .env / hosting dashboard for the live site; localhost is only
 // the fallback for local development.
-const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
-// const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+// const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 function studentToken() {
   return localStorage.getItem("studentToken") || "";
@@ -19,6 +19,8 @@ function studentToken() {
 function adminToken() {
   return sessionStorage.getItem("adminToken") || "";
 }
+
+
 
 function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -76,6 +78,10 @@ const ExamAPI = {
   adminCreateCodingQuestion: (payload) => request("/admin/coding-questions", { method: "POST", auth: "admin", body: payload }),
   adminUpdateCodingQuestion: (id, payload) => request(`/admin/coding-questions/${id}`, { method: "PUT", auth: "admin", body: payload }),
   adminDeleteCodingQuestion: (id) => request(`/admin/coding-questions/${id}`, { method: "DELETE", auth: "admin" }),
+  adminGetCodingSets: () => request("/admin/coding-sets", { auth: "admin" }),
+  adminCreateCodingSet: (payload) => request("/admin/coding-sets", { method: "POST", auth: "admin", body: payload }),
+  adminUpdateCodingSet: (id, payload) => request(`/admin/coding-sets/${id}`, { method: "PUT", auth: "admin", body: payload }),
+  adminDeleteCodingSet: (id) => request(`/admin/coding-sets/${id}`, { method: "DELETE", auth: "admin" }),
   adminBulkCreateCodingQuestions: (questions) => request("/admin/coding-questions/bulk", { method: "POST", auth: "admin", body: { questions } }),
 
   // ---- Exams (round 1 config) ----

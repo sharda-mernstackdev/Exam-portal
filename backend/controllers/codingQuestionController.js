@@ -1,18 +1,14 @@
 const CodingQuestion = require('../models/CodingQuestion');
 const SecondLevelExam = require('../models/SecondLevelExam');
+const CodingSet = require('../models/CodingSet');
 const { isMobileRequest, MOBILE_BLOCK_MESSAGE } = require('../utils/device');
 
 // GET /api/coding-questions - student-facing: the Round 2 paper (text-box questions
 // and MCQs). The correct answers are never sent to the browser.
 //
-// The Round 2 question bank is organised into three sets by `difficulty`
-// (Easy/Medium/Hard). Whichever set the currently active Round 2 exam
-// config was created with (its own `difficulty` field, chosen in the
-// "Create Test Cases Exam Configuration" form) is the set every candidate
-// gets here — same "current active SecondLevelExam" lookup used elsewhere
-// (submissionController) to pick which Round 2 config is live right now.
-// A config with no difficulty set (or none configured yet) falls back to
-// the full active bank, so nothing breaks for exams created before this.
+// The paper is made from the question sets (Text answer / MCQ) of the currently
+// active Round 2 test — same "current active SecondLevelExam" lookup used elsewhere
+// (submissionController) to pick which Round 2 test is live right now.
 exports.listActiveCodingQuestions = async (req, res) => {
   // The Round 2 paper is never served to a phone or tablet.
   if (isMobileRequest(req)) {
@@ -47,22 +43,21 @@ function mixQuestions(list) {
   return out;
 }
 
-// The Round 2 paper currently in force (see the comment above). Shared with
-// Round 2 submission checking so both agree on which questions are valid.
-// Only text-box and MCQ questions are part of the paper (the old compile-and-run
-// questions are not used any more).
+// The Round 2 paper currently in force. Shared with Round 2 submission checking
+// so both agree on which questions are valid. Only text-box and MCQ questions
+// are part of the paper (the old compile-and-run questions are not used any more).
 async function getActiveCodingQuestions() {
   const currentExam = await SecondLevelExam.findOne({ active: true }).sort({ createdAt: -1 });
-  const filter = { active: true, type: { $in: ['text', 'mcq'] } };
-  if (currentExam) {
-    // Several difficulty sets can be ticked on one config; older configs only
-    // have the single `difficulty` field.
-    const levels = currentExam.difficulties && currentExam.difficulties.length
-      ? currentExam.difficulties
-      : (currentExam.difficulty ? [currentExam.difficulty] : []);
-    if (levels.length) filter.difficulty = { $in: levels };
+  // A test made from question sets (Text answer / MCQ): the paper is all the
+  // active questions of the types of its active sets.
+  if (currentExam && currentExam.sectionIds && currentExam.sectionIds.length) {
+    const sets = await CodingSet.find({ _id: { $in: currentExam.sectionIds }, active: true });
+    const types = sets.map((st) => st.type);
+    const picked = await CodingQuestion.find({ active: true, type: { $in: types } }).sort({ createdAt: 1, _id: 1 });
+    return mixQuestions(picked);
   }
-  const list = await CodingQuestion.find(filter).sort({ createdAt: 1, _id: 1 });
+  // A test with no question sets (made long ago) gets all the active questions.
+  const list = await CodingQuestion.find({ active: true, type: { $in: ['text', 'mcq'] } }).sort({ createdAt: 1, _id: 1 });
   return mixQuestions(list);
 }
 exports.getActiveCodingQuestions = getActiveCodingQuestions;

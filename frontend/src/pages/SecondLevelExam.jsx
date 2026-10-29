@@ -151,6 +151,7 @@ export default function SecondLevelExam() {
   // question's answer can never land in another's.
   const answersRef = useRef({}); // q.id -> answer
   const draftOwnerRef = useRef("");
+  const visitedRef = useRef({}); // q.id -> true once the question was opened
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => n + 1);
 
@@ -603,6 +604,25 @@ export default function SecondLevelExam() {
   const minutes = String(Math.floor(timeLeft / 60)).padStart(2, "0");
   const seconds = String(timeLeft % 60).padStart(2, "0");
 
+  // Question palette (same idea as Round 1): answered / not answered (opened but
+  // empty) / not visited.
+  if (q) visitedRef.current[q.id] = true;
+  const isAnswered = (qq) => String(answersRef.current[qq.id] || "").trim() !== "";
+  function stateOf(qq, idx) {
+    if (isAnswered(qq)) return "answered";
+    if (idx === currentIndex || visitedRef.current[qq.id]) return "not-answered";
+    return "not-visited";
+  }
+  const counts = { answered: 0, notAnswered: 0, notVisited: 0 };
+  if (questions) {
+    questions.forEach((qq, idx) => {
+      const st = stateOf(qq, idx);
+      if (st === "answered") counts.answered++;
+      else if (st === "not-answered") counts.notAnswered++;
+      else counts.notVisited++;
+    });
+  }
+
   return (
     <div style={{ background: "#f4f6f9", fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif", userSelect: "none", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {phase === "exam" && timeLeft <= 0 && !(onlineMode && submitting) && (
@@ -620,20 +640,17 @@ export default function SecondLevelExam() {
       )}
 
       {/* Header */}
-      <div className="d-flex justify-content-between align-items-center" style={{ background: "#0f172a", color: "#fff", padding: "12px 24px", flexShrink: 0 }}>
+      <div className="d-flex justify-content-between align-items-center flex-wrap gap-2" style={{ background: "#0f172a", color: "#fff", padding: "10px 20px", flexShrink: 0 }}>
         <div className="d-flex align-items-center gap-3">
-          <h5 className="mb-0 text-warning"><i className="fa-solid fa-pen-to-square me-2"></i>Round 2 Exam</h5>
-          <span className="badge bg-secondary px-3 py-2">{candidateName || "Candidate Name"}</span>
+          <h5 className="mb-0 text-warning"><i className="fa-solid fa-graduation-cap me-2"></i>Online Exam Portal - Round 2</h5>
+          <span className="badge bg-secondary">{candidateName || "Candidate Name"}</span>
         </div>
         <LiveClock style={{ backgroundColor: "rgba(255,255,255,0.1)", padding: "4px 12px", borderRadius: 6, fontSize: "0.85rem", color: "#38bdf8" }} className="d-none d-md-flex align-items-center" />
         {phase === "exam" && (
           <div className="d-flex align-items-center gap-3">
             <div className="bg-danger text-white px-3 py-1 rounded fw-bold">
-              <i className="fa-regular fa-clock me-1"></i> {minutes}:{seconds}
+              <i className="fa-regular fa-clock me-1"></i> Time Left: {minutes}:{seconds}
             </div>
-            <button className="btn btn-outline-light btn-sm fw-bold" disabled={locked} onClick={() => { if (window.confirm("Complete the exam? You cannot change your answers after this.")) submitExam(false); }}>
-              Complete Exam
-            </button>
           </div>
         )}
       </div>
@@ -683,119 +700,154 @@ export default function SecondLevelExam() {
       )}
 
       {phase === "exam" && q && (
-        <div className="flex-fill d-flex" style={{ minHeight: 0 }}>
-          <div className="d-flex w-100 h-100" style={{ gap: 16, padding: 16 }}>
-            {/* Sidebar */}
-            <div style={{ width: 250, flexShrink: 0, background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 16, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-              <div className="fw-bold text-uppercase" style={{ fontSize: "0.85rem", color: "#64748b", marginBottom: 8 }}>
-                <i className="fa-solid fa-list-check me-2"></i>Questions
-              </div>
-              {questions.map((qq, idx) => {
-                const answered = String(answersRef.current[qq.id] || "").trim() !== "";
-                return (
-                  <div
-                    key={qq.id}
-                    onClick={() => loadQuestionInto(idx)}
-                    className="d-flex align-items-center justify-content-between"
-                    style={{
-                      background: idx === currentIndex ? "#0d6efd" : "#f8fafc",
-                      color: idx === currentIndex ? "#fff" : "#334155",
-                      border: `1px solid ${idx === currentIndex ? "#0d6efd" : "#cbd5e1"}`,
-                      borderRadius: 6, padding: "10px 12px", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer"
-                    }}
-                  >
-                    <span>Q{idx + 1}. {qq.type === "mcq" ? "MCQ" : "Written answer"}</span>
-                    <span style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0, background: answered ? "#10b981" : "#cbd5e1" }}></span>
+        <div className="flex-fill" style={{ minHeight: 0, overflowY: "auto" }}>
+          <div className="container-fluid py-3">
+            <div className="row">
+              {/* Left: Question area */}
+              <div className="col-lg-9">
+                <div className="shadow-sm" style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, minHeight: 480, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                  <div>
+                    <div className="d-flex justify-content-between align-items-center" style={{ background: "#e2e8f0", padding: "10px 15px", fontWeight: "bold" }}>
+                      <span>Question No. {currentIndex + 1} <span className="text-secondary fw-normal small">of {questions.length}</span></span>
+                      <span className="d-flex align-items-center gap-2">
+                        <span className="badge bg-secondary px-3 py-2">{q.type === "mcq" ? "MCQ" : "Written answer"}</span>
+                        <span className="badge bg-primary px-3 py-2">Marks: +1, -0</span>
+                      </span>
+                    </div>
+
+                    <div className="p-4">
+                      {/* The question is plain text (never HTML), so tags such as <a> show as typed. */}
+                      <h5 className="fw-semibold mb-3" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{q.description}</h5>
+
+                      {q.type === "mcq" ? (
+                        <div>
+                          {(q.options || []).map((opt, i) => {
+                            const chosen = String(answersRef.current[q.id]) === String(i);
+                            return (
+                              <label
+                                key={i}
+                                className="option-label"
+                                style={{
+                                  display: "block", background: locked ? "#f1f5f9" : "#f8fafc", border: "1px solid #cbd5e1",
+                                  padding: "12px 15px", borderRadius: 6, cursor: locked ? "not-allowed" : "pointer", marginBottom: 10,
+                                  opacity: locked ? 0.8 : 1
+                                }}
+                              >
+                                <input
+                                  type="radio"
+                                  className="form-check-input me-3"
+                                  name={`mcq-${q.id}`}
+                                  checked={chosen}
+                                  disabled={locked}
+                                  onChange={() => setAnswer(q.id, String(i))}
+                                />
+                                <span className="option-text" style={chosen ? { fontWeight: "bold", color: "#0d6efd", whiteSpace: "pre-wrap" } : { whiteSpace: "pre-wrap" }}>
+                                  {String.fromCharCode(65 + i)}. {opt}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="form-label small fw-bold text-secondary text-uppercase">Your answer</label>
+                          {clipMsg && (
+                            <div className="text-danger fw-bold mb-1" style={{ fontSize: "0.78rem" }}>
+                              <i className="fa-solid fa-ban me-1"></i>{clipMsg}
+                            </div>
+                          )}
+                          <textarea
+                            key={q.id}
+                            rows={6}
+                            spellCheck={false}
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            placeholder="Type your answer here..."
+                            value={answersRef.current[q.id] || ""}
+                            readOnly={locked}
+                            onChange={handleAnswerChange}
+                            onKeyDown={handleAnswerKeyDown}
+                            onCopy={blockClipboardEvent("copy")}
+                            onCut={blockClipboardEvent("cut")}
+                            onPaste={blockClipboardEvent("paste")}
+                            onContextMenu={blockClipboardEvent("open the right-click menu")}
+                            onDrop={blockClipboardEvent("drop text")}
+                            onDragStart={(e) => e.preventDefault()}
+                            className="form-control"
+                            style={{ fontSize: "1rem", padding: 14, resize: "vertical", userSelect: "text", background: locked ? "#f1f5f9" : "#f8fafc", border: "1px solid #cbd5e1" }}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                );
-              })}
-              <div className="small text-muted mt-2">
-                <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#10b981", marginRight: 6 }}></span>Answered
-              </div>
-            </div>
 
-            {/* Main: question on top, answer below */}
-            <div className="d-flex flex-column flex-fill" style={{ minWidth: 0, background: "#fff", borderRadius: 8, border: "1px solid #cbd5e1", padding: 24, overflowY: "auto" }}>
-              <div className="d-flex align-items-center mb-3">
-                <span className="fw-bold" style={{ color: "#1e293b", fontSize: "1.2rem" }}>Question {currentIndex + 1} of {questions.length}</span>
-                <span className="ms-2 badge bg-secondary">{q.type === "mcq" ? "MCQ" : "Written answer"}</span>
-              </div>
-
-              {/* The question is plain text (never HTML), so tags such as <a> show as typed. */}
-              <div style={{ fontSize: "1.02rem", color: "#1e293b", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 20 }}>{q.description}</div>
-
-              {q.type === "mcq" ? (
-                <div className="d-flex flex-column" style={{ gap: 10, maxWidth: 720 }}>
-                  {(q.options || []).map((opt, i) => {
-                    const chosen = String(answersRef.current[q.id]) === String(i);
-                    return (
-                      <label
-                        key={i}
-                        className="d-flex align-items-center"
-                        style={{
-                          gap: 12, padding: "12px 14px", borderRadius: 8, cursor: locked ? "default" : "pointer",
-                          border: `2px solid ${chosen ? "#0d6efd" : "#cbd5e1"}`, background: chosen ? "#eff6ff" : "#fff"
-                        }}
-                      >
-                        <input
-                          type="radio"
-                          name={`mcq-${q.id}`}
-                          checked={chosen}
-                          disabled={locked}
-                          onChange={() => setAnswer(q.id, String(i))}
-                        />
-                        <span style={{ whiteSpace: "pre-wrap" }}>{opt}</span>
-                      </label>
-                    );
-                  })}
-                  {String(answersRef.current[q.id] || "") !== "" && !locked && (
+                  <div className="bg-light p-3 border-top d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div>
-                      <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setAnswer(q.id, "")}>Clear my choice</button>
+                      <button className="btn btn-outline-secondary me-2" disabled={locked || String(answersRef.current[q.id] || "") === ""} onClick={() => setAnswer(q.id, "")}>
+                        <i className="fa-solid fa-rotate-left me-1"></i> Clear Response
+                      </button>
+                      <button className="btn btn-outline-secondary" disabled={currentIndex === 0} onClick={handlePrev}>
+                        <i className="fa-solid fa-chevron-left me-1"></i> Prev
+                      </button>
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div style={{ maxWidth: 720 }}>
-                  <label className="form-label small fw-bold text-secondary">Your answer</label>
-                  {clipMsg && (
-                    <div className="text-danger fw-bold mb-1" style={{ fontSize: "0.78rem" }}>
-                      <i className="fa-solid fa-ban me-1"></i>{clipMsg}
+                    <div>
+                      <button className="btn btn-primary px-4 fw-bold" onClick={handleNext}>
+                        {currentIndex === questions.length - 1 ? (<><i className="fa-solid fa-floppy-disk me-1"></i> Save</>) : (<>Next <i className="fa-solid fa-chevron-right ms-1"></i></>)}
+                      </button>
                     </div>
-                  )}
-                  <textarea
-                    key={q.id}
-                    rows={5}
-                    spellCheck={false}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    placeholder="Type your answer here..."
-                    value={answersRef.current[q.id] || ""}
-                    readOnly={locked}
-                    onChange={handleAnswerChange}
-                    onKeyDown={handleAnswerKeyDown}
-                    onCopy={blockClipboardEvent("copy")}
-                    onCut={blockClipboardEvent("cut")}
-                    onPaste={blockClipboardEvent("paste")}
-                    onContextMenu={blockClipboardEvent("open the right-click menu")}
-                    onDrop={blockClipboardEvent("drop text")}
-                    onDragStart={(e) => e.preventDefault()}
-                    className="form-control"
-                    style={{ fontSize: "1rem", padding: 14, resize: "vertical", userSelect: "text" }}
-                  />
+                  </div>
                 </div>
-              )}
+              </div>
 
-              {/* Prev / Next row. The camera box is fixed in the bottom-right corner (about
-                  184px wide), so the right padding keeps Next to the LEFT of it instead of
-                  underneath it. */}
-              <div className="d-flex justify-content-between mt-auto pt-4" style={{ gap: 10, paddingRight: 160, flexWrap: "wrap" }}>
-                <button className="btn btn-outline-secondary fw-bold px-4" disabled={currentIndex === 0} onClick={handlePrev}>
-                  <i className="fa-solid fa-arrow-left me-2"></i> Prev
-                </button>
-                <button className="btn btn-primary fw-bold px-4" onClick={handleNext}>
-                  {currentIndex === questions.length - 1 ? (<><i className="fa-solid fa-save me-1"></i> Save</>) : (<>Next <i className="fa-solid fa-arrow-right ms-2"></i></>)}
-                </button>
+              {/* Right: Palette */}
+              <div className="col-lg-3 mt-3 mt-lg-0">
+                <div className="shadow-sm" style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, padding: 15 }}>
+                  <h6 className="fw-bold mb-3 border-bottom pb-2"><i className="fa-solid fa-table-cells me-2"></i>Question Palette</h6>
+
+                  <div className="row g-2 mb-3 small">
+                    <div className="col-6"><span style={{ ...paletteBadge, background: "#198754" }}>{counts.answered}</span> Answered</div>
+                    <div className="col-6"><span style={{ ...paletteBadge, background: "#dc3545" }}>{counts.notAnswered}</span> Not Answered</div>
+                    <div className="col-6"><span style={{ ...paletteBadge, background: "#6c757d" }}>{counts.notVisited}</span> Not Visited</div>
+                  </div>
+
+                  <hr />
+
+                  <div className="d-flex flex-wrap justify-content-start">
+                    {questions.map((qq, idx) => {
+                      const st = stateOf(qq, idx);
+                      const bg = st === "answered" ? "#198754" : st === "not-answered" ? "#dc3545" : "#f1f5f9";
+                      const color = st !== "not-visited" ? "#fff" : "#334155";
+                      return (
+                        <button
+                          key={qq.id}
+                          type="button"
+                          onClick={() => loadQuestionInto(idx)}
+                          style={{
+                            width: 42, height: 42, margin: 4, fontWeight: "bold", borderRadius: 6,
+                            border: idx === currentIndex ? "3px solid #0d6efd" : "1px solid #cbd5e1",
+                            backgroundColor: bg, color, display: "flex", alignItems: "center", justifyContent: "center",
+                            cursor: "pointer", padding: 0
+                          }}
+                        >
+                          {idx + 1}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <hr className="my-4" />
+
+                  <button className="btn btn-danger w-100 py-2 fw-bold" disabled={locked} onClick={() => { if (window.confirm("Complete the exam? You cannot change your answers after this.")) submitExam(false); }}>
+                    {submitting ? (
+                      <><i className="fa-solid fa-spinner fa-spin me-2"></i>Submitting...</>
+                    ) : (
+                      <><i className="fa-solid fa-paper-plane me-2"></i>Complete Exam</>
+                    )}
+                  </button>
+                </div>
+                {/* keeps the palette clear of the fixed camera box in the bottom-right corner */}
+                <div style={{ height: 170 }}></div>
               </div>
             </div>
           </div>
@@ -827,3 +879,8 @@ export default function SecondLevelExam() {
     </div>
   );
 }
+
+const paletteBadge = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 28, height: 28, borderRadius: "50%", fontSize: "0.75rem", color: "#fff", fontWeight: "bold"
+};

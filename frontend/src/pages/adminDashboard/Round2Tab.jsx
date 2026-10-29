@@ -7,7 +7,7 @@ import DateTimePicker, { toISTISOString } from "./DateTimePicker";
 // A Round 2 question is either a "Text answer" (the candidate types the answer in a
 // box; it must match the correct answer exactly) or an "MCQ" (4 options).
 const EMPTY_CQ_FORM = {
-  type: "text", difficulty: "Medium", description: "", answer: "",
+  type: "text", description: "", answer: "",
   optA: "", optB: "", optC: "", optD: "", correct: "A"
 };
 const OPTION_LETTERS = ["A", "B", "C", "D"];
@@ -45,20 +45,18 @@ const ROUND2_CARD_THEMES = [
   { accent: "#2563eb", dark: "#1d4ed8", bg: "#eff6ff", chipBg: "#dbeafe" }  // blue
 ];
 
-// Fixed set list for the Round 2 Question Bank's master/detail view — same
-// idea as Round 1's category list, but difficulty only ever has these 3.
-const DIFFICULTY_LEVELS = ["Easy", "Medium", "Hard"];
-
-// The difficulty sets a Round 2 config serves. Newer configs store a list
-// (`difficulties`); older ones only have the single `difficulty` field.
-function examLevels(ex) {
-  if (Array.isArray(ex.difficulties) && ex.difficulties.length) return ex.difficulties;
-  return ex.difficulty ? [ex.difficulty] : [];
-}
+// Round 2 has only these 2 question sets (same idea as Round 1's question sets,
+// but fixed): "Text answer" and "MCQ". A set holds the duration and the number of
+// questions; the questions of that type in the bank belong to it.
+const SET_CHOICES = [
+  { value: "text", label: "Text answer" },
+  { value: "mcq", label: "MCQ" }
+];
+const EMPTY_SET_FORM = { type: "", duration: "", totalQuestions: "", status: "Active" };
 
 const FRONTEND_URL = window.location.origin;
 
-const EMPTY_EXAM_FORM = { examName: "", duration: "", testCases: "", difficulties: ["Medium"], startTime: "", endTime: "", loginWindowMinutes: "0", examMode: "online" };
+const EMPTY_EXAM_FORM = { examName: "", status: "Active", sectionIds: [], startTime: "", endTime: "", loginWindowMinutes: "0", examMode: "online" };
 
 export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsChanged, onCodingQuestionsChanged }) {
   // Offline exams (Round 1 tests that have their own web address) and the Round 2
@@ -75,54 +73,140 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       .catch(() => { /* nothing to show */ });
   }, []);
 
-  // ---- Second-level exam config form ----
+  // ---- Question sets (Text answer / MCQ) ----
+  const [codingSets, setCodingSets] = useState([]);
+  const [setForm, setSetForm] = useState(EMPTY_SET_FORM);
+  const [editingSetId, setEditingSetId] = useState(null);
+
+  function loadSets() {
+    ExamAPI.adminGetCodingSets()
+      .then((list) => setCodingSets(list || []))
+      .catch(() => { /* nothing to show */ });
+  }
+  useEffect(() => { loadSets(); }, []);
+
+  const setLabel = (type) => (SET_CHOICES.find((c) => c.value === type) || {}).label || type;
+  // Number of questions of this set that a candidate gets: its active questions.
+  function servedCount(set) {
+    return codingQuestions.filter((q) => q.type === set.type && q.active !== false).length;
+  }
+  function bankCount(type) {
+    return codingQuestions.filter((q) => q.type === type).length;
+  }
+
+  function startEditSet(st) {
+    setEditingSetId(st._id);
+    setSetForm({
+      type: st.type,
+      duration: String(st.durationMinutes || ""),
+      totalQuestions: String(st.totalQuestionsTarget || ""),
+      status: st.active === false ? "Inactive" : "Active"
+    });
+    document.getElementById("round2SetFormAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function cancelEditSet() {
+    setEditingSetId(null);
+    setSetForm(EMPTY_SET_FORM);
+  }
+
+  function handleSetSubmit(e) {
+    e.preventDefault();
+    if (!setForm.type) { alert("Please select the question set name (Text answer or MCQ)."); return; }
+    const payload = {
+      type: setForm.type,
+      title: setLabel(setForm.type),
+      durationMinutes: Number(setForm.duration),
+      totalQuestionsTarget: Number(setForm.totalQuestions) || 0,
+      active: setForm.status === "Active"
+    };
+    const req = editingSetId ? ExamAPI.adminUpdateCodingSet(editingSetId, payload) : ExamAPI.adminCreateCodingSet(payload);
+    req
+      .then(() => {
+        setEditingSetId(null);
+        setSetForm(EMPTY_SET_FORM);
+        loadSets();
+        onSecondExamsChanged();
+      })
+      .catch((err) => alert(err.message || "Could not save the question set."));
+  }
+
+  function handleSetDelete(st) {
+    if (!window.confirm(`Delete the "${st.title}" question set? All its ${bankCount(st.type)} question(s) will be deleted from the question bank too, and it will be removed from the tests.`)) return;
+    ExamAPI.adminDeleteCodingSet(st._id)
+      .then(() => { loadSets(); onSecondExamsChanged(); onCodingQuestionsChanged(); })
+      .catch((err) => alert(err.message || "Could not delete the question set."));
+  }
+
+  // The sets that can still be created (one "Text answer" set, one "MCQ" set).
+  const createdTypes = new Set(codingSets.map((x) => x.type));
+  const freeSetChoices = SET_CHOICES.filter((c) => !createdTypes.has(c.value) || c.value === setForm.type);
+
+  // ---- Test (Round 2 config) form: combine the question sets, like Round 1 ----
   const [examForm, setExamForm] = useState(EMPTY_EXAM_FORM);
   const [editingExamId, setEditingExamId] = useState(null);
-  const [diffOpen, setDiffOpen] = useState(false);
-  const diffBoxRef = useRef(null);
-  useEffect(() => {
-    if (!diffOpen) return undefined;
-    const onDown = (e) => {
-      if (diffBoxRef.current && !diffBoxRef.current.contains(e.target)) setDiffOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [diffOpen]);
+  const [pendingSetId, setPendingSetId] = useState("");
+
+  const selectedSets = codingSets.filter((x) => examForm.sectionIds.includes(x._id));
+  const testTotalDuration = selectedSets.reduce((sum, x) => sum + (x.durationMinutes || 0), 0);
+  const testTotalQuestions = selectedSets.reduce((sum, x) => sum + (x.totalQuestionsTarget || 0), 0);
+
+  function setTestSections(sectionIds) {
+    setExamForm((prev) => {
+      const total = codingSets
+        .filter((x) => sectionIds.includes(x._id))
+        .reduce((sum, x) => sum + (x.durationMinutes || 0), 0);
+      return {
+        ...prev,
+        sectionIds,
+        endTime: prev.startTime ? computeEndTime(prev.startTime, total) : prev.endTime
+      };
+    });
+  }
+
+  function addTestSection() {
+    if (!pendingSetId || examForm.sectionIds.includes(pendingSetId)) return;
+    setTestSections([...examForm.sectionIds, pendingSetId]);
+    setPendingSetId("");
+  }
+
+  function removeTestSection(id) {
+    setTestSections(examForm.sectionIds.filter((x) => x !== id));
+  }
 
   function startEditExam(ex) {
     setEditingExamId(ex._id);
     setExamForm({
       examName: ex.title,
-      duration: String(ex.durationMinutes || ""),
-      testCases: "",
-      difficulties: examLevels(ex).length ? examLevels(ex) : ["Medium"],
+      status: ex.active === false ? "Inactive" : "Active",
+      sectionIds: (ex.sectionIds || []).map((x) => (typeof x === "string" ? x : x._id)),
       startTime: toDatetimeLocal(ex.startTime),
       endTime: toDatetimeLocal(ex.endTime),
       loginWindowMinutes: String(ex.loginWindowMinutes || 0),
       examMode: ex.examMode || "online"
     });
+    setPendingSetId("");
     document.getElementById("round2ExamFormAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function cancelEditExam() {
     setEditingExamId(null);
     setExamForm(EMPTY_EXAM_FORM);
+    setPendingSetId("");
   }
 
   function handleExamSubmit(e) {
     e.preventDefault();
-    if (examForm.difficulties.length === 0) {
-      alert("Please tick at least one difficulty (Easy / Medium / Hard).");
+    if (examForm.sectionIds.length === 0) {
+      alert("Add at least one question set to this test.");
       return;
     }
-    // Keep the levels in Easy -> Hard order; `difficulty` = the first one, for older code.
-    const levels = DIFFICULTY_LEVELS.filter((d) => examForm.difficulties.includes(d));
     const offline = examForm.examMode === "campus";
     const payload = {
       title: examForm.examName.trim(),
-      durationMinutes: Number(examForm.duration),
-      difficulties: levels,
-      difficulty: levels[0],
+      durationMinutes: testTotalDuration,
+      sectionIds: examForm.sectionIds,
+      active: examForm.status === "Active",
       examMode: examForm.examMode || "online",
       // An offline exam has no access window: the students enter with their
       // email + the Round 2 access code at the exam's own Round 2 address.
@@ -137,9 +221,10 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       .then(() => {
         setEditingExamId(null);
         setExamForm(EMPTY_EXAM_FORM);
+        setPendingSetId("");
         onSecondExamsChanged();
       })
-      .catch((err) => alert(err.message || "Could not save Round 2 exam config."));
+      .catch((err) => alert(err.message || "Could not save the Round 2 test."));
   }
 
   function copyRound2Link() {
@@ -231,7 +316,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     setEditingId(q._id);
     const o = q.options || [];
     setCqForm({
-      type: q.type, difficulty: q.difficulty, description: q.description, answer: q.answer || "",
+      type: q.type, description: q.description, answer: q.answer || "",
       optA: o[0] || "", optB: o[1] || "", optC: o[2] || "", optD: o[3] || "",
       correct: OPTION_LETTERS[q.correctIndex] || "A"
     });
@@ -244,7 +329,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     let payload;
     if (cqForm.type === "text") {
       payload = {
-        type: "text", title: titleFromQuestion(description), difficulty: cqForm.difficulty,
+        type: "text", title: titleFromQuestion(description),
         description, answer: cqForm.answer.trim()
       };
     } else {
@@ -254,7 +339,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       if (options.length < 2) { alert("Please fill at least 2 options."); return; }
       if (!correctText) { alert("The correct option is empty. Choose a filled option as correct."); return; }
       payload = {
-        type: "mcq", title: titleFromQuestion(description), difficulty: cqForm.difficulty,
+        type: "mcq", title: titleFromQuestion(description),
         description, options, correctIndex: options.indexOf(correctText)
       };
     }
@@ -272,20 +357,18 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
     ExamAPI.adminDeleteCodingQuestion(id).then(onCodingQuestionsChanged).catch((err) => alert(err.message || "Could not delete."));
   }
 
-  // ---- Question Bank set list (same master/detail layout as Round 1's
-  // Question Bank: a left-side list of "sets" you click through, instead of
-  // one giant flat table). Round 1 groups by category (Aptitude, Verbal...);
-  // here the sets are the fixed Easy/Medium/Hard difficulty levels.
-  const questionsByDifficulty = new Map(DIFFICULTY_LEVELS.map((d) => [d, []]));
-  codingQuestions.forEach((q) => {
-    const key = DIFFICULTY_LEVELS.includes(q.difficulty) ? q.difficulty : "Medium";
-    questionsByDifficulty.get(key).push(q);
-  });
-
-  const [selectedDifficulty, setSelectedDifficulty] = useState(null);
-  const activeDifficulty = selectedDifficulty && DIFFICULTY_LEVELS.includes(selectedDifficulty)
-    ? selectedDifficulty
-    : DIFFICULTY_LEVELS[0];
+  // ---- Question Bank set list (same master/detail layout as Round 1's Question
+  // Bank): the sets on the left, the questions of the chosen set on the right.
+  // Round 2 has the 2 sets "Text answer" and "MCQ" (plus "Old code" while such
+  // old questions are still in the database).
+  const bankSets = [
+    ...SET_CHOICES.map((c) => ({ key: c.value, label: c.label, list: codingQuestions.filter((q) => q.type === c.value) })),
+    ...(codingQuestions.some((q) => q.type !== "text" && q.type !== "mcq")
+      ? [{ key: "code", label: "Old code", list: codingQuestions.filter((q) => q.type !== "text" && q.type !== "mcq") }]
+      : [])
+  ];
+  const [selectedBank, setSelectedBank] = useState(null);
+  const activeBank = bankSets.find((b) => b.key === selectedBank) || bankSets[0];
 
   return (
     <section className="page-section active">
@@ -293,116 +376,107 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
       <div className="section-sub">Manage Round 2 exam setup, questions (text answer + MCQ), and eligible candidates</div>
 
       <div className="card-box" id="round2ExamFormAnchor">
-        <h6>{editingExamId ? "Edit Test Cases Exam Configuration" : "Create Test Cases Exam Configuration"}</h6>
-        <div className="sub">Set up a coding / test-cases round for shortlisted candidates</div>
-        <form className="row g-3" onSubmit={handleExamSubmit}>
-          <div className="col-md-4">
-            <label className="form-label small fw-bold text-secondary">Exam Name</label>
-            <input type="text" className="form-control" placeholder="e.g. Test Cases Round 1" required
-              value={examForm.examName} onChange={(e) => setExamForm({ ...examForm, examName: e.target.value })} />
-          </div>
-          <div className="col-md-2">
-            <label className="form-label small fw-bold text-secondary">Duration (mins)</label>
-            <input type="number" className="form-control" min="1" placeholder="45" required
-              value={examForm.duration}
-              onChange={(e) => {
-                const duration = e.target.value;
-                setExamForm((prev) => ({
-                  ...prev,
-                  duration,
-                  endTime: prev.startTime ? computeEndTime(prev.startTime, duration) : prev.endTime
-                }));
-              }} />
-          </div>
-          <div className="col-md-2">
-            <label className="form-label small fw-bold text-secondary">Test Cases</label>
-            <input type="number" className="form-control" min="1" placeholder="10" required
-              value={examForm.testCases} onChange={(e) => setExamForm({ ...examForm, testCases: e.target.value })} />
-          </div>
-          <div className="col-md-2">
-            <label className="form-label small fw-bold text-secondary">Difficulty</label>
-            <div className="position-relative" ref={diffBoxRef}>
-            <button type="button" className="form-select text-start bg-white"
-              onClick={() => setDiffOpen((o) => !o)} aria-expanded={diffOpen}>
-              {DIFFICULTY_LEVELS.filter((d) => examForm.difficulties.includes(d)).join(", ") || "Select difficulty"}
-            </button>
-            {diffOpen && (
-            <div className="border rounded px-3 py-2 bg-white shadow position-absolute w-100"
-              style={{ zIndex: 20, top: "100%", left: 0 }}>
-              {DIFFICULTY_LEVELS.map((d) => (
-                <div className="form-check" key={d}>
-                  <input
-                    type="checkbox"
-                    className="form-check-input"
-                    id={`round2Diff-${d}`}
-                    checked={examForm.difficulties.includes(d)}
-                    onChange={(e) =>
+        <h6>{editingExamId ? "Edit Test" : "Create Test"}</h6>
+        <div className="sub">Pick existing question sets (Text answer, MCQ) to combine into one named test — duration and total questions are auto-summed from the sets you add.</div>
+        {codingSets.length === 0 ? (
+          <div className="text-muted small">Create at least one question set below before building a test.</div>
+        ) : (
+          <form className="row g-3" onSubmit={handleExamSubmit}>
+            <div className="col-md-6">
+              <label className="form-label small fw-bold text-secondary">Exam Mode</label>
+              <select className="form-select" value={examForm.examMode} onChange={(e) => setExamForm({ ...examForm, examMode: e.target.value })}>
+                <option value="online">Online exam</option>
+                <option value="campus">Offline exam (campus drive) — own Round 2 address, no time window</option>
+              </select>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label small fw-bold text-secondary">Test Name</label>
+              <input type="text" className="form-control" placeholder="e.g. Final Exam 2026" required
+                value={examForm.examName} onChange={(e) => setExamForm({ ...examForm, examName: e.target.value })} />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label small fw-bold text-secondary">Status</label>
+              <select className="form-select" value={examForm.status} onChange={(e) => setExamForm({ ...examForm, status: e.target.value })}>
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+              </select>
+            </div>
+
+            <div className="col-md-6">
+              <label className="form-label small fw-bold text-secondary">Add Question Set</label>
+              <select className="form-select" value={pendingSetId} onChange={(e) => setPendingSetId(e.target.value)}>
+                <option value="">Select a question set...</option>
+                {codingSets.filter((x) => !examForm.sectionIds.includes(x._id)).map((x) => (
+                  <option key={x._id} value={x._id}>{x.title} ({x.durationMinutes || 0}m, {x.totalQuestionsTarget || 0}q)</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-md-2 d-flex align-items-end">
+              <button type="button" className="btn btn-outline-dark w-100 fw-bold" disabled={!pendingSetId} onClick={addTestSection}>+ Add</button>
+            </div>
+
+            {selectedSets.length > 0 && (
+              <div className="col-12">
+                <div className="d-flex flex-wrap gap-2">
+                  {selectedSets.map((x) => (
+                    <span key={x._id} className="badge-pill attempted d-flex align-items-center gap-2" style={{ fontSize: "0.85rem" }}>
+                      {x.title} ({x.durationMinutes || 0}m, {x.totalQuestionsTarget || 0}q)
+                      <button type="button" className="btn-close btn-close-white" style={{ fontSize: "0.6rem" }} aria-label="Remove" onClick={() => removeTestSection(x._id)}></button>
+                    </span>
+                  ))}
+                </div>
+                <div className="small text-muted mt-2">
+                  Total duration: <span className="fw-bold text-dark">{testTotalDuration} mins</span> &nbsp;·&nbsp;
+                  Total questions: <span className="fw-bold text-dark">{testTotalQuestions}</span>
+                </div>
+              </div>
+            )}
+
+            {examForm.examMode === "campus" ? (
+              <div className="col-12">
+                <div className="small text-muted">Offline exam: no access window needed. Students open the exam's Round 2 address (shown on its card below) and enter their email + the Round 2 access code.</div>
+              </div>
+            ) : (
+              <>
+                <div className="col-12"><hr className="my-1" /></div>
+                <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
+                <div className="col-md-4">
+                  <label className="form-label small fw-bold text-secondary">Access Opens</label>
+                  <DateTimePicker
+                    value={examForm.startTime}
+                    onChange={(startTime) => {
                       setExamForm((prev) => ({
                         ...prev,
-                        difficulties: e.target.checked
-                          ? [...prev.difficulties, d]
-                          : prev.difficulties.filter((x) => x !== d)
-                      }))
-                    } />
-                  <label className="form-check-label" htmlFor={`round2Diff-${d}`}>{d}</label>
+                        startTime,
+                        endTime: testTotalDuration ? computeEndTime(startTime, testTotalDuration) : prev.endTime
+                      }));
+                    }} />
                 </div>
-              ))}
-            </div>
+                <div className="col-md-4">
+                  <label className="form-label small fw-bold text-secondary">
+                    Access Closes <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
+                  </label>
+                  <DateTimePicker
+                    value={examForm.endTime} onChange={(endTime) => setExamForm({ ...examForm, endTime })} />
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
+                  <input type="number" className="form-control" min="0" placeholder="0"
+                    value={examForm.loginWindowMinutes}
+                    onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
+                  <div className="form-text">Candidates can log in this many minutes before "Access Opens" (0 = exactly at Access Opens). Leave the dates blank for always-open access.</div>
+                </div>
+              </>
             )}
+
+            <div className="col-12 d-flex gap-2 flex-wrap">
+              <button type="submit" className="btn btn-dark fw-bold px-4">{editingExamId ? "Save Changes" : "+ Create Test"}</button>
+              {editingExamId && (
+                <button type="button" className="btn btn-outline-secondary fw-bold" onClick={cancelEditExam}>Cancel</button>
+              )}
             </div>
-            <div className="form-text">Tick one or more. Candidates get questions from all ticked sets.</div>
-          </div>
-          <div className="col-md-4">
-            <label className="form-label small fw-bold text-secondary">Exam Mode</label>
-            <select className="form-select" value={examForm.examMode} onChange={(e) => setExamForm({ ...examForm, examMode: e.target.value })}>
-              <option value="online">Online exam</option>
-              <option value="campus">Offline exam (campus drive) — own Round 2 address, no time window</option>
-            </select>
-          </div>
-          {examForm.examMode === "campus" && (
-            <div className="col-md-8 d-flex align-items-end">
-              <div className="small text-muted">Offline exam: no access window needed. Students open the exam's Round 2 address (shown on its card below) and enter their email + the Round 2 access code.</div>
-            </div>
-          )}
-          {examForm.examMode !== "campus" && (
-            <>
-          <div className="col-12"><hr className="my-1" /></div>
-          <div className="col-12 small fw-bold text-uppercase text-secondary">Round 2 access window (optional — e.g. opens right when Round 1 ends)</div>
-          <div className="col-md-4">
-            <label className="form-label small fw-bold text-secondary">Access Opens</label>
-            <DateTimePicker
-              value={examForm.startTime}
-              onChange={(startTime) => {
-                setExamForm((prev) => ({
-                  ...prev,
-                  startTime,
-                  endTime: prev.duration ? computeEndTime(startTime, prev.duration) : prev.endTime
-                }));
-              }} />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label small fw-bold text-secondary">
-              Access Closes <span className="text-muted fw-normal">(auto-calculated — edit if needed)</span>
-            </label>
-            <DateTimePicker
-              value={examForm.endTime} onChange={(endTime) => setExamForm({ ...examForm, endTime })} />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label small fw-bold text-secondary">Login Window (mins before start)</label>
-            <input type="number" className="form-control" min="0" placeholder="0"
-              value={examForm.loginWindowMinutes}
-              onChange={(e) => setExamForm({ ...examForm, loginWindowMinutes: e.target.value })} />
-            <div className="form-text">Candidates can log in this many minutes before "Access Opens" (0 = exactly at Access Opens). Leave the dates blank for always-open access.</div>
-          </div>
-            </>
-          )}
-          <div className="col-12 d-flex gap-2 flex-wrap">
-            <button type="submit" className="btn btn-dark fw-bold px-4">{editingExamId ? "Save Changes" : "Save"}</button>
-            {editingExamId && (
-              <button type="button" className="btn btn-outline-secondary fw-bold" onClick={cancelEditExam}>Cancel Edit</button>
-            )}
-          </div>
-        </form>
+          </form>
+        )}
       </div>
 
       <div className="card-box">
@@ -414,8 +488,8 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
           <div className="row g-3 mt-1">
             {secondExams.slice().reverse().map((ex, idx) => {
               const theme = ROUND2_CARD_THEMES[idx % ROUND2_CARD_THEMES.length];
-              const levels = examLevels(ex);
-              const qCount = levels.reduce((sum, d) => sum + (questionsByDifficulty.get(d) || []).filter((q) => q.type === "text" || q.type === "mcq").length, 0);
+              const exSets = codingSets.filter((x) => (ex.sectionIds || []).some((id) => (typeof id === "string" ? id : id._id) === x._id));
+              const qCount = exSets.filter((x) => x.active !== false).reduce((sum, x) => sum + servedCount(x), 0);
               return (
                 <div className="col-md-6 col-lg-4" key={ex._id}>
                   <div className="test-card" style={{ borderTop: `5px solid ${theme.accent}`, background: theme.bg }}>
@@ -437,12 +511,14 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
                         <div className="test-card-stat-value" style={{ color: theme.dark }}>{qCount}</div>
                         <div className="test-card-stat-label">questions</div>
                       </div>
-                      {levels.length > 0 && (
-                        <span className="test-card-chip align-self-center" style={{ background: theme.chipBg, color: theme.dark }}>
-                          <i className="fa-solid fa-layer-group me-1"></i>{levels.join(" + ")} {levels.length > 1 ? "sets" : "set"}
-                        </span>
-                      )}
                     </div>
+                    {exSets.length > 0 && (
+                      <div className="d-flex flex-wrap gap-1 mb-2">
+                        {exSets.map((x) => (
+                          <span key={x._id} className="test-card-chip" style={{ background: theme.chipBg, color: theme.dark }}>{x.title}</span>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="test-card-schedule">
                       {ex.examMode === "campus" ? (
@@ -552,6 +628,86 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
         )}
       </div>
 
+      <div className="card-box" id="round2SetFormAnchor">
+        <h6>{editingSetId ? "Edit Question Set" : "Question Set Name"}</h6>
+        <div className="sub">Add a question-set (Text answer or MCQ) — this is just a bank of questions, not something students register for directly. Combine one or more of these into a "Test" above to schedule an actual exam session.</div>
+        <form className="row g-3" onSubmit={handleSetSubmit}>
+          <div className="col-md-4">
+            <label className="form-label small fw-bold text-secondary">Question Set Name</label>
+            <select className="form-select" required disabled={!!editingSetId}
+              value={setForm.type} onChange={(e) => setSetForm({ ...setForm, type: e.target.value })}>
+              <option value="" disabled>Select a question set...</option>
+              {freeSetChoices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            {freeSetChoices.length === 0 && (
+              <div className="form-text text-warning">Both question sets are already created.</div>
+            )}
+          </div>
+          <div className="col-md-2">
+            <label className="form-label small fw-bold text-secondary">Duration (mins)</label>
+            <input type="number" className="form-control" min="1" placeholder="30" required
+              value={setForm.duration} onChange={(e) => setSetForm({ ...setForm, duration: e.target.value })} />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label small fw-bold text-secondary">Total Questions</label>
+            <input type="number" className="form-control" min="1" placeholder="20" required
+              value={setForm.totalQuestions} onChange={(e) => setSetForm({ ...setForm, totalQuestions: e.target.value })} />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label small fw-bold text-secondary">Status</label>
+            <select className="form-select" value={setForm.status} onChange={(e) => setSetForm({ ...setForm, status: e.target.value })}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+          </div>
+          <div className="col-md-2 d-flex align-items-end gap-2">
+            <button type="submit" className="btn btn-dark w-100 fw-bold" disabled={freeSetChoices.length === 0 && !editingSetId}>{editingSetId ? "Save Changes" : "+ Add Exam"}</button>
+          </div>
+          {editingSetId && (
+            <div className="col-12">
+              <button type="button" className="btn btn-sm btn-outline-secondary" onClick={cancelEditSet}>Cancel edit</button>
+            </div>
+          )}
+        </form>
+      </div>
+
+      {codingSets.length > 0 && (
+        <div className="card-box">
+          <h6>Existing Question Sets</h6>
+          <div className="sub">The Round 2 question sets. Add the questions of each set in "Manage Round 2 Questions" below.</div>
+          <div className="table-responsive">
+            <table className="table candidates-table mb-0 align-middle">
+              <thead><tr><th>Question Set</th><th>Duration</th><th>Total Questions</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {codingSets.map((st) => {
+                  const actual = bankCount(st.type);
+                  const target = st.totalQuestionsTarget || 0;
+                  const atTarget = target > 0 && actual >= target;
+                  const underTarget = target > 0 && actual < target;
+                  return (
+                    <tr key={st._id}>
+                      <td className="name-cell">{st.title}</td>
+                      <td>{st.durationMinutes} mins</td>
+                      <td>
+                        <span className={`fw-bold ${atTarget ? "text-success" : underTarget ? "text-warning" : ""}`}>
+                          {actual}{target > 0 ? ` / ${target}` : ""}
+                        </span>
+                        {underTarget && <div className="small text-muted">{target - actual} more needed</div>}
+                      </td>
+                      <td><span className={`badge-pill ${st.active === false ? "fail" : "pass"}`}>{st.active === false ? "Inactive" : "Active"}</span></td>
+                      <td>
+                        <button type="button" className="btn-edit mb-1 me-1" onClick={() => startEditSet(st)}>Edit</button>
+                        <button type="button" className="btn-clear" onClick={() => handleSetDelete(st)}>Delete</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="card-box mt-4 border-top border-4 border-primary" id="codingQFormAnchor">
         <div className="d-flex justify-content-between align-items-start flex-wrap gap-2">
           <div>
@@ -570,7 +726,7 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
         </div>
         {csvImportMsg && <div className="small text-secondary mt-2">{csvImportMsg}</div>}
         <div className="form-text mt-1">
-          CSV columns: Type (Text / MCQ), Difficulty, Question, Correct Answer (Text only), Option A-D and Correct Option (A-D) (MCQ only). New questions are added automatically; the same question is not added twice.
+          CSV columns: Type (Text / MCQ), Question, Correct Answer (Text only), Option A-D and Correct Option (A-D) (MCQ only). New questions are added automatically; the same question is not added twice.
         </div>
 
         <form className="row g-3 mt-2" onSubmit={handleCqSubmit}>
@@ -579,12 +735,6 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             <select className="form-select" value={cqForm.type} onChange={(e) => setCqForm({ ...cqForm, type: e.target.value })}>
               <option value="text">Text answer (type in a box)</option>
               <option value="mcq">MCQ (choose an option)</option>
-            </select>
-          </div>
-          <div className="col-md-3">
-            <label className="form-label small fw-bold">Difficulty (Set)</label>
-            <select className="form-select" value={cqForm.difficulty} onChange={(e) => setCqForm({ ...cqForm, difficulty: e.target.value })}>
-              <option value="Easy">Easy</option><option value="Medium">Medium</option><option value="Hard">Hard</option>
             </select>
           </div>
           <div className="col-12">
@@ -640,25 +790,25 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
             <div className="col-md-4 order-1">
               <div className="qbank-set-heading">Question Sets</div>
               <div className="qbank-set-list">
-                {DIFFICULTY_LEVELS.map((d, idx) => {
-                  const count = (questionsByDifficulty.get(d) || []).length;
-                  const isActive = d === activeDifficulty;
+                {bankSets.map((b, idx) => {
+                  const count = b.list.length;
+                  const isActive = b.key === activeBank.key;
                   const theme = ROUND2_CARD_THEMES[idx % ROUND2_CARD_THEMES.length];
                   return (
                     <button
-                      key={d}
+                      key={b.key}
                       type="button"
                       className={`qbank-set-item${isActive ? " active" : ""}`}
                       style={{
                         borderLeftColor: theme.accent,
                         background: isActive ? theme.accent : "#fff"
                       }}
-                      onClick={() => setSelectedDifficulty(d)}
+                      onClick={() => setSelectedBank(b.key)}
                     >
                       <span className="qbank-set-icon" style={{ background: isActive ? "rgba(255,255,255,0.25)" : theme.chipBg, color: isActive ? "#fff" : theme.dark }}>
                         <i className="fa-solid fa-layer-group"></i>
                       </span>
-                      <span className="qbank-set-name">{d}</span>
+                      <span className="qbank-set-name">{b.label}</span>
                       <span className="qbank-set-count" style={{ background: isActive ? "rgba(255,255,255,0.25)" : theme.chipBg, color: isActive ? "#fff" : theme.dark }}>{count}</span>
                     </button>
                   );
@@ -670,19 +820,19 @@ export default function Round2Tab({ secondExams, codingQuestions, onSecondExamsC
               <div className="d-flex align-items-center justify-content-between mb-3">
                 <div className="d-flex align-items-center gap-2">
                   <span className="qbank-active-badge">
-                    <i className="fa-solid fa-layer-group me-2"></i>{activeDifficulty}
+                    <i className="fa-solid fa-layer-group me-2"></i>{activeBank.label}
                   </span>
-                  <span className="text-muted small">{(questionsByDifficulty.get(activeDifficulty) || []).length} question(s)</span>
+                  <span className="text-muted small">{activeBank.list.length} question(s)</span>
                 </div>
               </div>
-              {(questionsByDifficulty.get(activeDifficulty) || []).length === 0 ? (
+              {activeBank.list.length === 0 ? (
                 <div className="empty-state"><div className="emoji">🗂️</div><div>No questions in this set yet.</div></div>
               ) : (
                 <div className="table-responsive">
                   <table className="table candidates-table mb-0 align-middle">
                     <thead><tr><th style={{ width: 90 }}>Type</th><th>Question</th><th>Correct Answer</th><th style={{ minWidth: 140 }}>Action</th></tr></thead>
                     <tbody>
-                      {(questionsByDifficulty.get(activeDifficulty) || []).slice().reverse().map((q) => {
+                      {activeBank.list.slice().reverse().map((q) => {
                         const oldCode = q.type !== "text" && q.type !== "mcq";
                         return (
                           <tr key={q._id} style={oldCode ? { opacity: 0.6 } : undefined}>

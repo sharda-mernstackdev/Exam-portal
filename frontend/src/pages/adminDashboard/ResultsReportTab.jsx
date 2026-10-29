@@ -188,6 +188,24 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
   // OFFLINE candidates who passed Round 1 and still need the Round 2 mail
   // (online candidates get it automatically, so they are never in this list).
   const offlinePending = useMemo(() => journey.filter((r) => modeOf(r) === "offline" && isRound2MailPending(r)), [journey]);
+
+  // Small "Send Round 2 mail" button shown with the "Round 1 Passed" filter. It stays visible
+  // after the mails are sent: pressing it then only tells the admin they were already sent.
+  function sendRound2ToOfflinePassed() {
+    if (mailBusy) return;
+    if (offlinePending.length > 0) {
+      sendMails("round2", { studentIds: offlinePending.map((r) => r.studentId) }, "offline-pass-all", `${offlinePending.length} Offline candidate(s) who passed Round 1`);
+      return;
+    }
+    const passed = journey.filter((r) => modeOf(r) === "offline" && r.round1 && r.round1.status === "PASS" && r.round2Eligible);
+    if (passed.length === 0) {
+      setMailMsg({ type: "warning", text: "No Offline candidate has passed Round 1 yet." });
+    } else if (passed.every((r) => r.round2EmailSent)) {
+      setMailMsg({ type: "warning", text: "The Round 2 mail has already been sent to all Offline candidates who passed Round 1." });
+    } else {
+      setMailMsg({ type: "warning", text: "The Round 2 mail is already scheduled for the Offline candidates who passed Round 1. It will go out shortly." });
+    }
+  }
   const counts = useMemo(() => {
     const c = { r1Passed: 0, r1Failed: 0, r2Passed: 0, r2Failed: 0, clearedBoth: 0 };
     journey.forEach((r) => {
@@ -304,14 +322,6 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
             <div className="sub mb-0">Round 1 result, Round 2 eligibility/status, and combined final outcome per candidate</div>
           </div>
           <div className="d-flex gap-2 flex-wrap">
-            {offlinePending.length > 0 && (
-              <button type="button" className="btn btn-sm btn-primary fw-bold" disabled={!!mailBusy}
-                title="Sends the Round 2 mail (10 minutes after you confirm) to every Offline candidate who passed Round 1"
-                onClick={() => sendMails("round2", { studentIds: offlinePending.map((r) => r.studentId) }, "offline-pass-all", `${offlinePending.length} Offline candidate(s) who passed Round 1`)}>
-                <i className="fa-solid fa-paper-plane me-1"></i>
-                {mailBusy === "offline-pass-all" ? "Please wait..." : `Send Round 2 mail to Offline passed (${offlinePending.length})`}
-              </button>
-            )}
             <button className="btn btn-sm btn-success fw-bold" onClick={downloadJourneyCsv}>
               <i className="fa-solid fa-file-excel me-1"></i> Download list (Excel)
             </button>
@@ -371,15 +381,28 @@ export default function ResultsReportTab({ journey, qualifyingPct, onDataChanged
               {f.label}
             </button>
           ))}
-          <input
-            type="text"
-            className="form-control form-control-sm ms-auto"
-            style={{ maxWidth: 240 }}
-            placeholder="Search name or email..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="ms-auto d-flex align-items-center gap-2 flex-wrap">
+            {filter === "r1_passed" && modeFilter !== "online" && (
+              <button type="button" className="btn btn-sm btn-primary fw-bold" disabled={!!mailBusy}
+                title="Sends the Round 2 mail (10 minutes after you confirm) to every Offline candidate who passed Round 1. Candidates who already got it are skipped."
+                onClick={sendRound2ToOfflinePassed}>
+                <i className="fa-solid fa-paper-plane me-1"></i>
+                {mailBusy === "offline-pass-all" ? "Please wait..." : "Send Round 2 mail"}
+              </button>
+            )}
+            <input
+              type="text"
+              className="form-control form-control-sm"
+              style={{ maxWidth: 240 }}
+              placeholder="Search name or email..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
+        {filter === "r1_passed" && modeFilter !== "online" && mailMsg && (
+          <div className={`alert alert-${mailMsg.type} small py-2 mb-3`}>{mailMsg.text}</div>
+        )}
 
         {filtered.length === 0 ? (
           <div className="empty-state"><div className="emoji">📭</div><div>No candidates match this filter.</div></div>

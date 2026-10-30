@@ -138,7 +138,7 @@ export default function SecondLevelExam() {
   const draftBusyRef = useRef(false);
   const lastSavedRef = useRef("");
   const [resultLine, setResultLine] = useState("");
-  const [resultScore, setResultScore] = useState({ passed: 0, total: 0 });
+  const [, setResultScore] = useState({ passed: 0, total: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [clipMsg, setClipMsg] = useState("");
   const clipMsgTimerRef = useRef(null);
@@ -676,7 +676,7 @@ export default function SecondLevelExam() {
             <p className="text-muted small mb-4">You have <span className="fw-bold">{mode ? durationMin : EXAM_DURATION_MIN}</span> minutes to answer the questions.</p>
             <div className="text-start bg-light p-3 rounded mb-4 border">
               <ul className="mb-0 small text-secondary">
-                <li>Some questions have an <strong>answer box</strong>: type your answer exactly. Your answer is correct only if it matches the expected answer exactly (capital and small letters count).</li>
+                <li>Some questions have an <strong>answer box</strong>: type your answer exactly. Your answer is correct only if it matches the expected answer. Extra spaces and capital / small letters do not matter, but spelling and symbols must be exact.</li>
                 <li>Other questions are <strong>MCQs</strong>: choose one option. They come in between the written questions.</li>
                 <li>Copy, cut and paste are disabled. You can change an answer any time before you submit.</li>
                 {onlineMode ? (
@@ -881,14 +881,6 @@ export default function SecondLevelExam() {
             )}
             <h3 className="fw-bold mb-1">{resultKind === "expired" ? "Time Expired" : "Assessment Submitted"}</h3>
             <p className="text-muted mb-4">{resultLine}</p>
-            {resultScore && (
-              <div className="bg-light p-4 rounded border mb-4">
-                <h1 className="display-4 fw-bold text-primary mb-0">
-                  {resultScore.passed}<span className="fs-4 text-secondary"> / {resultScore.total}</span>
-                </h1>
-                <p className="small text-muted fw-bold text-uppercase mt-2 mb-0">Correct Answers</p>
-              </div>
-            )}
             <button className="btn btn-outline-dark fw-bold px-5" onClick={() => window.close()}>Close Window</button>
           </div>
         </div>
